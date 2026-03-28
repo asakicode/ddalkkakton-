@@ -124,8 +124,21 @@ function RoomPageInner() {
       setError(data.error || "방 생성에 실패했습니다.");
       return;
     }
-    const data = (await res.json()) as { code: string };
+    const data = (await res.json()) as { code: string; capacity: number };
     setRoomCode(data.code);
+    setRoomStatus({
+      code: data.code,
+      capacity: data.capacity,
+      submittedCount: 0,
+      confirmedTime: null,
+      confirmedSlot: null,
+      decisionMode: null,
+      result: null,
+      status: "waiting",
+      auctionWinnerId: null,
+      auctionWinningBid: null,
+      leadingBid: null,
+    });
     localStorage.setItem("currentRoomCode", data.code);
     setJoinCode(data.code);
   };

@@ -29,8 +29,6 @@ export async function POST(req: NextRequest) {
     userId?: number;
     roomCode?: string;
     blockedSlots?: string[];
-    bidSlot?: string | null;
-    bidAmount?: number;
     preferredSlot?: string | null;
     bidAmount?: number;
   };
@@ -58,8 +56,8 @@ export async function POST(req: NextRequest) {
   }
 
   const pref =
-    typeof parsed.preferredSlot === "string" && parsed.preferredSlot.trim()
-      ? parsed.preferredSlot.trim()
+    typeof preferredSlot === "string" && preferredSlot.trim()
+      ? preferredSlot.trim()
       : null;
 
   const normalizedBid = Number.isFinite(Number(bidAmount))

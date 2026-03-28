@@ -97,14 +97,14 @@ export default function MySchedulePage() {
         }),
       })
 
+      const data = await res.json().catch(() => ({} as { error?: string; balance?: number }))
+
       if (!res.ok) {
-        const data = await res.json()
         setSaveError(data.error || "저장 실패")
         await refreshUser(user.id)
         return
       }
 
-      const data = await res.json()
       if (data.balance !== undefined) {
         const updatedUser = { ...user, balance: data.balance }
         setUser(updatedUser)
