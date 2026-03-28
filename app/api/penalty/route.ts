@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
 
   const share = Math.floor(PENALTY / receivers.length);
 
-  const [, , , updatedUser] = await prisma.$transaction([
+  const [, , , , updatedUser] = await prisma.$transaction([
     prisma.roomBid.deleteMany({
       where: { roomId: room.id, userId },
     }),

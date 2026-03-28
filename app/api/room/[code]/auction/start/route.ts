@@ -3,10 +3,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { computeCandidateSlots } from "@/lib/room-schedule-helpers";
 
-type Params = { params: { code: string } | Promise<{ code: string }> };
+type Params = { params: Promise<{ code: string }> };
 
 export async function POST(_req: NextRequest, ctx: Params) {
-  const { code: raw } = await Promise.resolve(ctx.params as { code: string });
+  const { code: raw } = await ctx.params;
   const code = raw.trim().toUpperCase();
   if (!code) {
     return NextResponse.json({ error: "방 코드가 필요합니다." }, { status: 400 });
