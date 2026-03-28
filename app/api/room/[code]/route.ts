@@ -7,6 +7,7 @@ interface Params {
 }
 
 export async function GET(req: NextRequest, { params }: Params) {
+export async function GET(req: NextRequest, { params }: Params) {
   const resolvedParams = await params;
   const code = (resolvedParams.code ?? "").trim();
 
@@ -14,7 +15,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "방 코드가 필요합니다." }, { status: 400 });
   }
   const room = await prisma.room.findUnique({
-    where: { code },
+    where: { code: normalized },
     include: {
       schedules: {
         select: { userId: true, data: true, submittedAt: true },
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   if (room.auctionStartedAt && !room.confirmedTime) {
     auctionRequiredCount = submittedCount;
     for (const uid of submittedUserIds) {
-      const b = auctionBids.find((x) => x.userId === uid);
+      const b = auctionBids.find((x: { userId: number; isReady: boolean }) => x.userId === uid);
       if (b?.isReady) auctionReadyCount += 1;
     }
 
@@ -96,7 +97,10 @@ export async function GET(req: NextRequest, { params }: Params) {
   } | null = null;
   const uid = qUser ? Number(qUser) : NaN;
   if (!Number.isNaN(uid)) {
-    const row = auctionBids.find((b) => b.userId === uid);
+    const row = auctionBids.find(
+      (b: { userId: number; slotKey: string | null; bidAmount: number; isReady: boolean }) =>
+        b.userId === uid,
+    );
     if (row) {
       myAuctionBid = {
         slotKey: row.slotKey,
@@ -112,7 +116,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     hostId: room.hostId,
     confirmedTime: room.confirmedTime,
     decisionMode: room.decisionMode,
-    auctionStartedAt: room.auctionStartedAt?.toISOString() ?? null,
+    auctionStartedAt: room.auctionStartedAt,
     auctionWinnerId: room.auctionWinnerId,
     auctionWinningBid: room.auctionWinningBid,
     leadingBid,

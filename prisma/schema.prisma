@@ -25,7 +25,8 @@ model Room {
   hostId         Int
   confirmedTime  String?
   decisionMode   String?
-  auctionWinnerId Int?
+  auctionStartedAt DateTime?
+  auctionWinnerId  Int?
   auctionWinningBid Int?
   /** 실시간 경매 진행 중이면 설정, 정산 후 null */
   auctionStartedAt DateTime?

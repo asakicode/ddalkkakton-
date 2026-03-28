@@ -22,6 +22,7 @@ interface RoomStatus {
   confirmedTime: string | null;
   confirmedSlot: string | null;
   decisionMode: string | null;
+  auctionStartedAt?: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
   auctionWinnerId?: number | null;
@@ -133,6 +134,7 @@ function RoomPageInner() {
       confirmedTime: null,
       confirmedSlot: null,
       decisionMode: null,
+      auctionStartedAt: null,
       result: null,
       status: "waiting",
       auctionWinnerId: null,

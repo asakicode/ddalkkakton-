@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { computeCandidateSlots } from "@/lib/room-schedule-helpers";
 import { trySettleLiveAuction } from "@/lib/auction-room";
 
-type Params = { params: { code: string } | Promise<{ code: string }> };
+type Params = { params: Promise<{ code: string }> };
 
 function parseAmount(v: unknown): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return 0;
@@ -11,8 +12,8 @@ function parseAmount(v: unknown): number {
 }
 
 export async function POST(req: NextRequest, ctx: Params) {
-  const { code: raw } = await Promise.resolve(ctx.params as { code: string });
-  const code = raw.trim();
+  const { code: raw } = await ctx.params;
+  const code = raw.trim().toUpperCase();
   if (!code) {
     return NextResponse.json({ error: "방 코드가 필요합니다." }, { status: 400 });
   }
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest, ctx: Params) {
     );
   }
 
-  const participants = new Set(room.schedules.map((s) => s.userId));
+  const participants = new Set(room.schedules.map((s: { userId: number }) => s.userId));
   if (!participants.has(userId)) {
     return NextResponse.json(
       { error: "이 방에 시간표를 제출한 멤버만 배팅할 수 있습니다." },
@@ -129,7 +130,7 @@ export async function POST(req: NextRequest, ctx: Params) {
   }
 
   try {
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const live = await tx.room.findUnique({ where: { id: room.id } });
       if (live?.confirmedTime) {
         return null;
