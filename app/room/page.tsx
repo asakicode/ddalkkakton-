@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,9 +19,16 @@ interface RoomStatus {
   capacity: number;
   submittedCount: number;
   confirmedSlot: string | null;
+  result: string | null;
+  status: "waiting" | "ready" | "completed";
 }
 
-export default function RoomPage() {
+const POLL_MS = 2500;
+
+function RoomPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectedToRoulette = useRef(false);
   const [memberCount, setMemberCount] = useState(5);
   const [copied, setCopied] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -40,31 +48,48 @@ export default function RoomPage() {
       }
     }
 
+    const codeFromQuery = searchParams.get("code");
     const storedRoomCode = localStorage.getItem("currentRoomCode");
-    if (storedRoomCode) {
-      setRoomCode(storedRoomCode);
+    const initial = codeFromQuery?.trim() || storedRoomCode;
+    if (initial) {
+      setRoomCode(initial);
+      localStorage.setItem("currentRoomCode", initial);
     }
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!roomCode) return;
 
+    let cancelled = false;
+
     const fetchStatus = async () => {
-      const res = await fetch(`/api/room/${roomCode}`);
-      if (!res.ok) return;
+      const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}`);
+      if (!res.ok || cancelled) return;
       const data = (await res.json()) as RoomStatus;
+      if (cancelled) return;
       setRoomStatus(data);
     };
 
-    fetchStatus();
-    const timer = setInterval(fetchStatus, 2000);
-    return () => clearInterval(timer);
+    void fetchStatus();
+    const timer = setInterval(() => void fetchStatus(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [roomCode]);
+
+  useEffect(() => {
+    if (!roomCode || !roomStatus?.result || redirectedToRoulette.current) return;
+    redirectedToRoulette.current = true;
+    router.replace(`/roulette?code=${encodeURIComponent(roomCode)}`);
+  }, [roomCode, roomStatus?.result, router]);
 
   const allReady = useMemo(() => {
     if (!roomStatus) return false;
     return roomStatus.submittedCount >= roomStatus.capacity;
   }, [roomStatus]);
+
+  const isCompleted = roomStatus?.status === "completed" || Boolean(roomStatus?.result);
 
   const createRoom = async () => {
     if (!currentUser) {
@@ -94,15 +119,17 @@ export default function RoomPage() {
 
   const connectRoom = async () => {
     if (!joinCode.trim()) return;
-    const code = joinCode.trim().toUpperCase();
-    const res = await fetch(`/api/room/${code}`);
+    const code = joinCode.trim();
+    const res = await fetch(`/api/room/${encodeURIComponent(code)}`);
     if (!res.ok) {
       setError("유효하지 않은 방 코드입니다.");
       return;
     }
+    const data = (await res.json()) as RoomStatus;
     setError(null);
-    setRoomCode(code);
-    localStorage.setItem("currentRoomCode", code);
+    setRoomCode(data.code);
+    localStorage.setItem("currentRoomCode", data.code);
+    setRoomStatus(data);
   };
 
   const copyLink = () => {
@@ -115,7 +142,7 @@ export default function RoomPage() {
 
   const goRoulette = () => {
     if (!roomCode) return;
-    window.location.href = `/roulette?code=${roomCode}`;
+    window.location.href = `/roulette?code=${encodeURIComponent(roomCode)}`;
   };
 
   return (
@@ -195,6 +222,12 @@ export default function RoomPage() {
               </div>
             </div>
           </div>
+        ) : isCompleted ? (
+          <div className="space-y-4 rounded-lg border border-destructive/40 bg-destructive/10 p-6 text-center">
+            <p className="text-sm font-medium text-destructive">시간이 확정되었습니다</p>
+            <p className="font-mono text-2xl font-bold text-foreground">{roomStatus?.result}</p>
+            <p className="text-xs text-muted-foreground">룰렛 결과 화면으로 이동합니다…</p>
+          </div>
         ) : (
           <div className="space-y-6">
             <div className="rounded-lg border border-border bg-card p-4">
@@ -206,6 +239,16 @@ export default function RoomPage() {
                 </Button>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
+                상태:{" "}
+                <span className="font-medium text-foreground">
+                  {roomStatus?.status === "waiting"
+                    ? "대기 중 (시간표 제출 대기)"
+                    : roomStatus?.status === "ready"
+                      ? "준비 완료 (룰렛 가능)"
+                      : "—"}
+                </span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
                 팀원은 내 시간표 페이지에서 시간표 저장 시 같은 방 코드로 저장해야 제출 완료로 집계됩니다.
               </p>
             </div>
@@ -238,3 +281,19 @@ export default function RoomPage() {
   );
 }
 
+export default function RoomPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen pb-20 md:pb-0">
+          <Navigation />
+          <main className="mx-auto max-w-2xl px-4 py-6 text-sm text-muted-foreground">
+            불러오는 중…
+          </main>
+        </div>
+      }
+    >
+      <RoomPageInner />
+    </Suspense>
+  );
+}

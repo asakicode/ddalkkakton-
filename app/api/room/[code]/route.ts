@@ -28,13 +28,28 @@ export async function GET(_req: NextRequest, { params }: Params) {
   }
 
   const submittedUserIds = new Set(room.schedules.map((s) => s.userId));
+  const submittedCount = submittedUserIds.size;
+  const result = room.confirmedSlot;
+
+  let status: "waiting" | "ready" | "completed";
+  if (result) {
+    status = "completed";
+  } else if (submittedCount >= room.capacity) {
+    status = "ready";
+  } else {
+    status = "waiting";
+  }
 
   return NextResponse.json({
     code: room.code,
     capacity: room.capacity,
     hostId: room.hostId,
     confirmedSlot: room.confirmedSlot,
-    submittedCount: submittedUserIds.size,
+    /** 룰렛 확정 시간 (없으면 null). confirmedSlot 과 동일 */
+    result,
+    submittedCount,
+    /** 대기: 인원 미충족 / 준비: 전원 제출·아직 미확정 / 완료: 시간 확정 */
+    status,
   });
 }
 

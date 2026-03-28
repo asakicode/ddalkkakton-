@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
@@ -20,10 +20,15 @@ interface RoomStatus {
   capacity: number;
   submittedCount: number;
   confirmedSlot: string | null;
+  result: string | null;
+  status: "waiting" | "ready" | "completed";
 }
 
-export default function RoulettePage() {
+const POLL_MS = 2500;
+
+function RoulettePageInner() {
   const searchParams = useSearchParams();
+  const [mounted, setMounted] = useState(false);
   const [phase, setPhase] = useState<Phase>("ready");
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
@@ -31,41 +36,58 @@ export default function RoulettePage() {
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
+  // localStorage / URL은 클라이언트 마운트 이후에만 반영 → 하이드레이션과 동일한 초기 UI 유지
   useEffect(() => {
-    const codeFromQuery = searchParams.get("code");
-    const codeFromStorage = localStorage.getItem("currentRoomCode");
-    const finalCode = codeFromQuery ?? codeFromStorage;
-    if (finalCode) {
-      setRoomCode(finalCode.toUpperCase());
-      localStorage.setItem("currentRoomCode", finalCode.toUpperCase());
-    }
-
-    const storedUser = localStorage.getItem("currentUser");
-    if (storedUser) {
-      try {
-        setCurrentUser(JSON.parse(storedUser) as CurrentUser);
-      } catch {
-        // ignore
+    try {
+      const codeFromQuery = searchParams.get("code");
+      const codeFromStorage = localStorage.getItem("currentRoomCode");
+      const finalCode = (codeFromQuery ?? codeFromStorage)?.trim();
+      if (finalCode) {
+        setRoomCode(finalCode);
+        localStorage.setItem("currentRoomCode", finalCode);
       }
+
+      const storedUser = localStorage.getItem("currentUser");
+      if (storedUser) {
+        try {
+          setCurrentUser(JSON.parse(storedUser) as CurrentUser);
+        } catch {
+          // ignore
+        }
+      }
+    } finally {
+      setMounted(true);
     }
   }, [searchParams]);
 
   useEffect(() => {
     if (!roomCode) return;
-    const fetchStatus = async () => {
-      const res = await fetch(`/api/room/${roomCode}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as RoomStatus;
+
+    let cancelled = false;
+
+    const applyRoomPayload = (data: RoomStatus) => {
+      const slot = data.result ?? data.confirmedSlot;
       setRoomStatus(data);
-      if (data.confirmedSlot) {
-        setSelectedSlot(data.confirmedSlot);
+      if (slot) {
+        setSelectedSlot(slot);
         setPhase("locked");
       }
     };
 
-    fetchStatus();
-    const timer = setInterval(fetchStatus, 2000);
-    return () => clearInterval(timer);
+    const fetchStatus = async () => {
+      const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}`);
+      if (!res.ok || cancelled) return;
+      const data = (await res.json()) as RoomStatus;
+      if (cancelled) return;
+      applyRoomPayload(data);
+    };
+
+    void fetchStatus();
+    const timer = setInterval(() => void fetchStatus(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [roomCode]);
 
   const canSpin = useMemo(() => {
@@ -129,8 +151,33 @@ export default function RoulettePage() {
     };
     localStorage.setItem("currentUser", JSON.stringify(nextUser));
     setCurrentUser(nextUser);
-    alert(`불참 처리 완료: 현재 잔액 ${nextUser.balance.toLocaleString("ko-KR")}P`);
+    const formatted = new Intl.NumberFormat("ko-KR").format(nextUser.balance);
+    alert(`불참 처리 완료: 현재 잔액 ${formatted}P`);
   };
+
+  const staticHeader = (
+    <div className="mb-8 flex items-center gap-3">
+      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/20">
+        <Target className="h-5 w-5 text-primary" />
+      </div>
+      <div>
+        <h1 className="text-xl font-bold text-foreground">운명의 룰렛</h1>
+        <p className="text-sm text-muted-foreground">공통 빈 시간 중 하나가 강제 확정됩니다</p>
+      </div>
+    </div>
+  );
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen pb-20 md:pb-0">
+        <Navigation />
+        <main className="mx-auto max-w-2xl px-4 py-6">
+          {staticHeader}
+          <p className="text-sm text-muted-foreground">불러오는 중…</p>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen pb-20 md:pb-0">
@@ -165,6 +212,19 @@ export default function RoulettePage() {
         <div className="mb-4 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
           방 코드: <span className="font-mono font-semibold text-foreground">{roomCode ?? "-"}</span> / 제출
           인원: {roomStatus?.submittedCount ?? 0}/{roomStatus?.capacity ?? "-"}
+          {roomStatus?.status && (
+            <>
+              {" "}
+              / 상태:{" "}
+              <span className="font-medium text-foreground">
+                {roomStatus.status === "waiting"
+                  ? "대기 중"
+                  : roomStatus.status === "ready"
+                    ? "준비 완료"
+                    : "완료"}
+              </span>
+            </>
+          )}
         </div>
 
         <div
@@ -203,7 +263,12 @@ export default function RoulettePage() {
 
               <div>
                 <p className="mb-2 text-sm font-medium text-destructive">강제 확정</p>
-                <div className="text-4xl font-black text-destructive">{selectedSlot}</div>
+                <div
+                  className="text-4xl font-black text-destructive"
+                  suppressHydrationWarning
+                >
+                  {selectedSlot}
+                </div>
               </div>
 
               <div className="flex items-center justify-center gap-2 text-xl font-bold text-destructive">
@@ -258,3 +323,19 @@ export default function RoulettePage() {
   );
 }
 
+export default function RoulettePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen pb-20 md:pb-0">
+          <Navigation />
+          <main className="mx-auto max-w-2xl px-4 py-6 text-sm text-muted-foreground">
+            불러오는 중…
+          </main>
+        </div>
+      }
+    >
+      <RoulettePageInner />
+    </Suspense>
+  );
+}
