@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  password  String
+  balance   Int      @default(100000)
+  createdAt DateTime @default(now())
+
+  schedules Schedule[]
+}
+
+model Room {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique
+  capacity      Int
+  hostId        Int
+  confirmedSlot String?
+  confirmedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  schedules Schedule[]
+}
+
+model Schedule {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  roomId      Int?
+  data        Json
+  submittedAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id])
+  room Room? @relation(fields: [roomId], references: [id])
+}
