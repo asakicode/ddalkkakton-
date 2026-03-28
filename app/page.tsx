@@ -180,7 +180,8 @@ export default function MySchedulePage() {
               />
               <p className="text-xs text-muted-foreground">
                 시간표 저장 시 이 방 코드로 제출됩니다. 입찰은 지망 시간 하나에만 걸리며,
-                패찰된 입찰금만 차감되고 낙찰자는 자신의 지망 시간 우선권을 얻습니다.
+                낙찰/패찰 여부와 관계없이 실제 경매에 참여한 입찰금은 차감되고,
+                낙찰자는 자신의 지망 시간 우선권을 얻습니다.
               </p>
               {saveError && (
                 <p className="text-xs text-destructive">{saveError}</p>

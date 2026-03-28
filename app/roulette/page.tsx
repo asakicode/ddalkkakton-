@@ -318,7 +318,9 @@ function RoulettePageInner() {
               {roomStatus?.auctionWinningBid != null && roomStatus.auctionWinningBid > 0 && (
                 <div className="text-sm font-medium text-warning">
                   낙찰가: {roomStatus.auctionWinningBid.toLocaleString()}P
-                  {roomStatus.auctionWinnerId === currentUser?.id ? " (내 입찰 성공!)" : ""}
+                  {roomStatus.auctionWinnerId === currentUser?.id
+                    ? " (내 입찰 성공, 입찰금 차감 완료)"
+                    : ""}
                 </div>
               )}
 
