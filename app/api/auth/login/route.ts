@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
       id: user.id,
       name: user.name,
       balance: user.balance,
+      kakaoPayLinked: user.kakaoPayLinked,
     });
   } catch (error) {
     console.error("[auth/login] unexpected error:", error);

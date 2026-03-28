@@ -20,6 +20,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     id: user.id,
     name: user.name,
     balance: user.balance,
+    kakaoPayLinked: user.kakaoPayLinked,
   });
 }
 
