@@ -8,31 +8,13 @@ datasource db {
 }
 
 model User {
-  id                  Int                  @id @default(autoincrement())
-  name                String
-  password            String
-  balance             Int                  @default(100000)
-  kakaoPayLinked      Boolean              @default(false)
-  kakaoPayAccountName String?
-  kakaoPayAccountKey  String?
-  kakaoPayConnectedAt DateTime?
-  createdAt           DateTime             @default(now())
+  id        Int      @id @default(autoincrement())
+  name      String
+  password  String
+  balance   Int      @default(100000)
+  createdAt DateTime @default(now())
 
-  depositTransactions DepositTransaction[]
-  schedules           Schedule[]
-}
-
-model DepositTransaction {
-  id          Int      @id @default(autoincrement())
-  userId      Int
-  provider    String
-  type        String
-  amount      Int
-  status      String
-  description String?
-  createdAt   DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id])
+  schedules Schedule[]
 }
 
 model Room {
