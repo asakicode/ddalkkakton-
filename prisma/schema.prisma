@@ -27,6 +27,8 @@ model Room {
   decisionMode   String?
   auctionWinnerId Int?
   auctionWinningBid Int?
+  /** 실시간 경매 진행 중이면 설정, 정산 후 null */
+  auctionStartedAt DateTime?
   confirmedAt    DateTime?
   createdAt      DateTime  @default(now())
 

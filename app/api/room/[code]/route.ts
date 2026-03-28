@@ -6,10 +6,9 @@ interface Params {
   params: Promise<{ code: string }>;
 }
 
-export async function GET(_req: NextRequest, { params }: Params) {
+export async function GET(req: NextRequest, { params }: Params) {
   const resolvedParams = await params;
   const code = (resolvedParams.code ?? "").trim();
-  const normalized = code.toUpperCase();
 
   if (!code) {
     return NextResponse.json({ error: "방 코드가 필요합니다." }, { status: 400 });
@@ -113,6 +112,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     hostId: room.hostId,
     confirmedTime: room.confirmedTime,
     decisionMode: room.decisionMode,
+    auctionStartedAt: room.auctionStartedAt?.toISOString() ?? null,
     auctionWinnerId: room.auctionWinnerId,
     auctionWinningBid: room.auctionWinningBid,
     leadingBid,

@@ -76,20 +76,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "roomCode가 필요합니다." }, { status: 400 });
   }
 
-  const normalizedCode = String(roomCode).trim().toUpperCase();
-  if (!normalizedCode) {
-    return NextResponse.json({ error: "roomCode가 필요합니다." }, { status: 400 });
-  }
+  const codeVariants = Array.from(new Set([code, code.toUpperCase()]));
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const lockedRooms = await tx.$queryRaw<LockedRoom[]>`
-      SELECT "id", "confirmedTime", "decisionMode", "auctionWinnerId", "auctionWinningBid"
-      FROM "Room"
-      WHERE "code" = ${normalizedCode}
-      FOR UPDATE
-    `;
-
-    const lockedRoom = lockedRooms[0];
+    let lockedRoom: LockedRoom | undefined;
+    for (const candidate of codeVariants) {
+      const lockedRooms = await tx.$queryRaw<LockedRoom[]>`
+        SELECT "id", "confirmedTime", "decisionMode", "auctionWinnerId", "auctionWinningBid"
+        FROM "Room"
+        WHERE "code" = ${candidate}
+        FOR UPDATE
+      `;
+      lockedRoom = lockedRooms[0];
+      if (lockedRoom) break;
+    }
     if (!lockedRoom) {
       return { kind: "not-found" as const };
     }

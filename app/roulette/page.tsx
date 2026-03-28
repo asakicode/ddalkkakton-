@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
@@ -56,19 +56,6 @@ function RoulettePageInner() {
   const [busy, setBusy] = useState(false);
   const [draftBySlot, setDraftBySlot] = useState<Record<string, string>>({});
 
-  const refreshUser = async (id: number) => {
-    try {
-      const res = await fetch(`/api/user/${id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentUser(data);
-        localStorage.setItem("currentUser", JSON.stringify(data));
-      }
-    } catch (e) {
-      // ignore
-    }
-  };
-
   useEffect(() => {
     try {
       const codeFromQuery = searchParams.get("code");
@@ -110,12 +97,12 @@ function RoulettePageInner() {
     setCurrentUser(u);
   }, [currentUser?.id]);
 
-  const fetchStatus = useCallback(async () => {
-    if (!roomCode) return;
+  const fetchStatus = useCallback(async (): Promise<RoomStatus | null> => {
+    if (!roomCode) return null;
     const uid = currentUser?.id;
     const q = uid != null ? `?userId=${encodeURIComponent(String(uid))}` : "";
     const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}${q}`);
-    if (!res.ok) return;
+    if (!res.ok) return null;
     const data = (await res.json()) as RoomStatus;
     setRoomStatus(data);
 
@@ -129,7 +116,14 @@ function RoulettePageInner() {
     } else {
       setPhase("pre");
     }
+    return data;
   }, [roomCode, currentUser?.id]);
+
+  const lastPolledStatusRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    lastPolledStatusRef.current = undefined;
+  }, [roomCode]);
 
   useEffect(() => {
     if (!roomCode) return;
@@ -138,10 +132,17 @@ function RoulettePageInner() {
 
     const tick = async () => {
       if (cancelled) return;
-      const previousStatus = roomStatus?.status;
-      await fetchStatus();
-      if (!cancelled && previousStatus !== "completed" && roomStatus?.status === "completed" && currentUser?.id) {
-        void refreshUser(currentUser.id);
+      const data = await fetchStatus();
+      if (
+        !cancelled &&
+        data?.status === "completed" &&
+        lastPolledStatusRef.current !== "completed" &&
+        currentUser?.id
+      ) {
+        void refreshUserBalance();
+      }
+      if (data?.status) {
+        lastPolledStatusRef.current = data.status;
       }
     };
 
@@ -151,7 +152,7 @@ function RoulettePageInner() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [roomCode, currentUser?.id, fetchStatus, refreshUser, roomStatus?.status]);
+  }, [roomCode, currentUser?.id, fetchStatus, refreshUserBalance]);
 
   const canStartAuction = useMemo(() => {
     if (!roomStatus) return false;
@@ -210,10 +211,6 @@ function RoulettePageInner() {
       setError(data.error || "확정에 실패했습니다.");
       setBusy(false);
       return;
-    }
-
-    if (currentUser?.id) {
-      refreshUser(currentUser.id);
     }
 
     if (data.status === "already-confirmed") {
