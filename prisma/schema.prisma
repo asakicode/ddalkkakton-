@@ -19,15 +19,16 @@ model User {
 }
 
 model Room {
-  id               Int       @id @default(autoincrement())
-  code             String    @unique
-  capacity         Int
-  hostId           Int
-  confirmedTime    String?
-  decisionMode     String?
-  confirmedAt      DateTime?
-  auctionStartedAt DateTime?
-  createdAt        DateTime  @default(now())
+  id             Int       @id @default(autoincrement())
+  code           String    @unique
+  capacity       Int
+  hostId         Int
+  confirmedTime  String?
+  decisionMode   String?
+  auctionWinnerId Int?
+  auctionWinningBid Int?
+  confirmedAt    DateTime?
+  createdAt      DateTime  @default(now())
 
   schedules Schedule[]
   bids      RoomBid[]

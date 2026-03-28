@@ -24,10 +24,9 @@ interface RoomStatus {
   decisionMode: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
-  candidateSlots?: string[];
-  auctionStartedAt?: string | null;
-  auctionReadyCount?: number;
-  auctionRequiredCount?: number;
+  auctionWinnerId?: number | null;
+  auctionWinningBid?: number | null;
+  leadingBid?: number | null;
 }
 
 const POLL_MS = 2500;
@@ -249,6 +248,11 @@ function RoomPageInner() {
                 확정 방식: {decisionModeLabel(roomStatus.decisionMode)}
               </p>
             )}
+            {roomStatus?.auctionWinningBid != null && roomStatus.auctionWinningBid > 0 && (
+              <p className="text-sm font-medium text-warning">
+                낙찰가: {roomStatus.auctionWinningBid.toLocaleString()}P
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">룰렛 결과 화면으로 이동합니다…</p>
           </div>
         ) : (
@@ -281,6 +285,11 @@ function RoomPageInner() {
               <p className="text-sm text-muted-foreground">
                 {roomStatus?.submittedCount ?? 0}/{roomStatus?.capacity ?? memberCount} 명 완료
               </p>
+              {roomStatus?.leadingBid != null && roomStatus.leadingBid > 0 && (
+                <p className="mt-2 text-sm font-medium text-warning">
+                  현재 제출된 최고 입찰액: {roomStatus.leadingBid.toLocaleString()}P
+                </p>
+              )}
             </div>
 
             {allReady && (

@@ -20,6 +20,22 @@ export default function MySchedulePage() {
   const [authForm, setAuthForm] = useState({ name: "", password: "" })
   const [authError, setAuthError] = useState<string | null>(null)
   const [roomCode, setRoomCode] = useState<string>("")
+  const [preferredSlot, setPreferredSlot] = useState<string>("")
+  const [bidAmount, setBidAmount] = useState<string>("")
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const refreshUser = async (id: number) => {
+    try {
+      const res = await fetch(`/api/user/${id}`)
+      if (res.ok) {
+        const data = await res.json()
+        setUser(data)
+        localStorage.setItem("currentUser", JSON.stringify(data))
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
 
   useEffect(() => {
     const stored = localStorage.getItem("currentUser")
@@ -58,28 +74,51 @@ export default function MySchedulePage() {
     }
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!user) {
-      setAuthError("먼저 로그인해주세요.")
+      setSaveError("먼저 로그인해주세요.")
       return
     }
 
+    setSaveError(null)
     const blocked = Array.from(blockedSlots)
+    const bid = parseInt(bidAmount, 10) || 0
 
-    fetch("/api/schedule", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    try {
+      const res = await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-        userId: user.id,
-        roomCode: roomCode.trim() || undefined,
-        blockedSlots: blocked,
-      }),
-    }).catch(() => {
-      // 단순 프로토타입: 에러 메시지는 별도로 처리하지 않음
-    })
+          userId: user.id,
+          roomCode: roomCode.trim() || undefined,
+          blockedSlots: blocked,
+          preferredSlot: preferredSlot.trim() || undefined,
+          bidAmount: bid > 0 ? bid : undefined,
+        }),
+      })
 
-    setIsSaved(true)
-    setTimeout(() => setIsSaved(false), 2000)
+      if (!res.ok) {
+        const data = await res.json()
+        setSaveError(data.error || "저장 실패")
+        await refreshUser(user.id)
+        return
+      }
+
+      const data = await res.json()
+      if (data.balance !== undefined) {
+        const updatedUser = { ...user, balance: data.balance }
+        setUser(updatedUser)
+        localStorage.setItem("currentUser", JSON.stringify(updatedUser))
+      } else {
+        await refreshUser(user.id)
+      }
+
+      setSaveError(null)
+      setIsSaved(true)
+      setTimeout(() => setIsSaved(false), 2000)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "저장 중 오류 발생")
+    }
   }
 
   const blockedCount = blockedSlots.size
@@ -126,10 +165,27 @@ export default function MySchedulePage() {
                   방 코드 저장
                 </Button>
               </div>
+              <input
+                className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+                placeholder="지망 시간 (선택, 예: 금-14:00) — 공통 시간 안에서만 반영"
+                value={preferredSlot}
+                onChange={(e) => setPreferredSlot(e.target.value)}
+              />
+              <input
+                className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+                placeholder="입찰 금액 (선택, 예: 10000)"
+                type="number"
+                value={bidAmount}
+                onChange={(e) => setBidAmount(e.target.value)}
+              />
               <p className="text-xs text-muted-foreground">
-                시간표 저장 시 이 방 코드로 제출됩니다. 인원이 모이면 방 페이지에서 공통 후보 시간에
-                예치금을 걸어 배팅할 수 있습니다.
+                시간표 저장 시 이 방 코드로 제출됩니다. 입찰은 지망 시간 하나에만 걸리며,
+                낙찰/패찰 여부와 관계없이 실제 경매에 참여한 입찰금은 차감되고,
+                낙찰자는 자신의 지망 시간 우선권을 얻습니다.
               </p>
+              {saveError && (
+                <p className="text-xs text-destructive">{saveError}</p>
+              )}
             </div>
           ) : (
             <div className="flex flex-col gap-2">

@@ -28,15 +28,9 @@ interface RoomStatus {
   auctionStartedAt: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
-  candidateSlots?: string[];
-  auctionReadyCount?: number;
-  auctionRequiredCount?: number;
-  slotTotals?: Record<string, number>;
-  myAuctionBid?: {
-    slotKey: string | null;
-    bidAmount: number;
-    isReady: boolean;
-  } | null;
+  auctionWinnerId?: number | null;
+  auctionWinningBid?: number | null;
+  leadingBid?: number | null;
 }
 
 const POLL_MS = 1100;
@@ -50,8 +44,19 @@ function RoulettePageInner() {
   const [roomStatus, setRoomStatus] = useState<RoomStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-  const [draftBySlot, setDraftBySlot] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
+
+  const refreshUser = async (id: number) => {
+    try {
+      const res = await fetch(`/api/user/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentUser(data);
+        localStorage.setItem("currentUser", JSON.stringify(data));
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     try {
@@ -120,7 +125,26 @@ function RoulettePageInner() {
 
     let cancelled = false;
 
-    const tick = async () => {
+    const applyRoomPayload = (data: RoomStatus) => {
+      const slot =
+        data.result ?? data.confirmedTime ?? data.confirmedSlot ?? null;
+      setRoomStatus((prev) => {
+        const wasCompleted = prev?.status === "completed";
+        if (data.status === "completed" && !wasCompleted && currentUser?.id) {
+          refreshUser(currentUser.id);
+        }
+        return data;
+      });
+      if (slot) {
+        setSelectedSlot(slot);
+        setPhase("locked");
+      }
+    };
+
+    const fetchStatus = async () => {
+      const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}`);
+      if (!res.ok || cancelled) return;
+      const data = (await res.json()) as RoomStatus;
       if (cancelled) return;
       await fetchStatus();
     };
@@ -131,7 +155,7 @@ function RoulettePageInner() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [roomCode, fetchStatus]);
+  }, [roomCode, currentUser?.id]);
 
   const canStartAuction = useMemo(() => {
     if (!roomStatus) return false;
@@ -191,17 +215,16 @@ function RoulettePageInner() {
       setBusy(false);
       return;
     }
-    await refreshUserBalance();
-    await fetchStatus();
-    if (data.status === "confirmed") {
-      if (data.confirmedTime) setSelectedSlot(data.confirmedTime);
-    }
-    setBusy(false);
-  };
 
-  const submitAnywhere = async () => {
-    if (!roomCode || !currentUser) {
-      setError("로그인 후 다시 시도해주세요.");
+    if (currentUser?.id) {
+      refreshUser(currentUser.id);
+    }
+
+    if (data.status === "already-confirmed") {
+      setSelectedSlot(
+        (data.confirmedTime as string) ?? (data.confirmedSlot as string),
+      );
+      setPhase("locked");
       return;
     }
     setError(null);
@@ -374,7 +397,17 @@ function RoulettePageInner() {
                   {selectedSlot}
                 </div>
               </div>
-              <div className="flex items-center justify-center gap-2 text-lg font-bold text-destructive">
+
+              {roomStatus?.auctionWinningBid != null && roomStatus.auctionWinningBid > 0 && (
+                <div className="text-sm font-medium text-warning">
+                  낙찰가: {roomStatus.auctionWinningBid.toLocaleString()}P
+                  {roomStatus.auctionWinnerId === currentUser?.id
+                    ? " (내 입찰 성공, 입찰금 차감 완료)"
+                    : ""}
+                </div>
+              )}
+
+              <div className="flex items-center justify-center gap-2 text-xl font-bold text-destructive">
                 <Skull className="h-6 w-6" />
                 탈출 불가
                 <Skull className="h-6 w-6" />

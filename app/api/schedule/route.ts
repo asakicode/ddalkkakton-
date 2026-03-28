@@ -25,76 +25,35 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const parsed = (body ?? {}) as {
-    bidOnly?: boolean;
+  const { userId, roomCode, blockedSlots, preferredSlot, bidAmount } = (body ?? {}) as {
     userId?: number;
     roomCode?: string;
     blockedSlots?: string[];
     bidSlot?: string | null;
     bidAmount?: number;
     preferredSlot?: string | null;
+    bidAmount?: number;
   };
 
-  const { bidOnly, userId, roomCode } = parsed;
-
-  if (!userId) {
-    return NextResponse.json({ error: "userId가 필요합니다." }, { status: 400 });
+  if (!userId || !Array.isArray(blockedSlots)) {
+    return NextResponse.json({ error: "userId와 blockedSlots가 필요합니다." }, { status: 400 });
   }
 
-  if (bidOnly) {
-    const code = (roomCode ?? "").trim();
-    if (!code) {
-      return NextResponse.json({ error: "roomCode가 필요합니다." }, { status: 400 });
-    }
-
-    const room = await prisma.room.findUnique({ where: { code } });
-    if (!room) {
-      return NextResponse.json({ error: "방을 찾을 수 없습니다." }, { status: 404 });
-    }
-
-    const latest = await prisma.schedule.findFirst({
-      where: { userId, roomId: room.id },
-      orderBy: { submittedAt: "desc" },
-    });
-
-    if (!latest) {
-      return NextResponse.json(
-        { error: "이 방에 제출된 시간표가 없습니다. 먼저 시간표를 저장하세요." },
-        { status: 400 },
-      );
-    }
-
-    const prev = latest.data as ScheduleData;
-    const bidSlot =
-      typeof parsed.bidSlot === "string" && parsed.bidSlot.trim()
-        ? parsed.bidSlot.trim()
-        : null;
-    const bidAmount = parseBidAmount(parsed.bidAmount);
-
-    await prisma.schedule.update({
-      where: { id: latest.id },
-      data: {
-        data: {
-          ...prev,
-          blocked: prev.blocked ?? [],
-          bidSlot,
-          bidAmount,
-        } as object,
-      },
-    });
-
-    return NextResponse.json({ ok: true, bidSlot, bidAmount });
-  }
-
-  const { blockedSlots } = parsed;
-  if (!Array.isArray(blockedSlots)) {
-    return NextResponse.json({ error: "blockedSlots가 필요합니다." }, { status: 400 });
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    return NextResponse.json({ error: "사용자를 찾을 수 없습니다." }, { status: 404 });
   }
 
   let roomId: number | null = null;
   if (roomCode) {
-    const trimmed = roomCode.trim();
-    const room = await prisma.room.findUnique({ where: { code: trimmed } });
+    const normalizedRoomCode = roomCode.trim().toUpperCase();
+    const room = await prisma.room.findUnique({ where: { code: normalizedRoomCode } });
+    if (room?.confirmedTime) {
+      return NextResponse.json(
+        { error: "이미 시간이 확정된 방입니다." },
+        { status: 409 },
+      );
+    }
     roomId = room?.id ?? null;
   }
 
@@ -103,24 +62,45 @@ export async function POST(req: NextRequest) {
       ? parsed.preferredSlot.trim()
       : null;
 
-  const bidSlot =
-    typeof parsed.bidSlot === "string" && parsed.bidSlot.trim()
-      ? parsed.bidSlot.trim()
-      : null;
-  const bidAmount = parseBidAmount(parsed.bidAmount);
+  const normalizedBid = Number.isFinite(Number(bidAmount))
+    ? Math.floor(Number(bidAmount))
+    : 0;
+
+  if (normalizedBid < 0) {
+    return NextResponse.json({ error: "배팅 금액은 0 이상이어야 합니다." }, { status: 400 });
+  }
+
+  if (pref && blockedSlots.includes(pref)) {
+    return NextResponse.json(
+      { error: "지망 시간은 불가능한 시간으로 선택할 수 없습니다." },
+      { status: 400 },
+    );
+  }
+
+  if (normalizedBid > 0 && !pref) {
+    return NextResponse.json(
+      { error: "배팅하려면 지망 시간을 함께 선택해야 합니다." },
+      { status: 400 },
+    );
+  }
+
+  if (normalizedBid > user.balance) {
+    return NextResponse.json(
+      {
+        error: "현재 예치금보다 많이 배팅할 수 없습니다.",
+        balance: user.balance,
+      },
+      { status: 400 },
+    );
+  }
 
   const schedule = await prisma.schedule.create({
     data: {
       userId,
       roomId: roomId ?? undefined,
-      data: {
-        blocked: blockedSlots,
-        preferredSlot: pref,
-        bidSlot,
-        bidAmount,
-      } as object,
+      data: { blocked: blockedSlots, preferredSlot: pref, bidAmount: normalizedBid },
     },
   });
 
-  return NextResponse.json({ id: schedule.id });
+  return NextResponse.json({ id: schedule.id, bidAmount: normalizedBid });
 }
