@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "hostId와 capacity가 필요합니다." }, { status: 400 });
   }
 
-  const normalizedCode = (code ?? "").trim();
+  const normalizedCode = (code ?? "").trim().toUpperCase();
   const finalCode =
     normalizedCode ||
     Math.random().toString(36).substring(2, 8).toUpperCase();

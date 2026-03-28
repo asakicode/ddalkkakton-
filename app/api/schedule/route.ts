@@ -46,13 +46,21 @@ export async function POST(req: NextRequest) {
   if (roomCode) {
     const normalizedRoomCode = roomCode.trim().toUpperCase();
     const room = await prisma.room.findUnique({ where: { code: normalizedRoomCode } });
+
+    if (!room) {
+      return NextResponse.json(
+        { error: "존재하지 않는 방 코드입니다." },
+        { status: 404 },
+      );
+    }
+
     if (room?.confirmedTime) {
       return NextResponse.json(
         { error: "이미 시간이 확정된 방입니다." },
         { status: 409 },
       );
     }
-    roomId = room?.id ?? null;
+    roomId = room.id;
   }
 
   const pref =
