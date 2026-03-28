@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { computeCandidateSlots } from "@/lib/room-schedule-helpers";
 
@@ -6,7 +7,7 @@ type Params = { params: { code: string } | Promise<{ code: string }> };
 
 export async function POST(_req: NextRequest, ctx: Params) {
   const { code: raw } = await Promise.resolve(ctx.params as { code: string });
-  const code = raw.trim();
+  const code = raw.trim().toUpperCase();
   if (!code) {
     return NextResponse.json({ error: "방 코드가 필요합니다." }, { status: 400 });
   }
@@ -24,7 +25,7 @@ export async function POST(_req: NextRequest, ctx: Params) {
     return NextResponse.json({ error: "이미 시간이 확정된 방입니다." }, { status: 400 });
   }
 
-  const submitted = new Set(room.schedules.map((s) => s.userId));
+  const submitted = new Set(room.schedules.map((s: { userId: number }) => s.userId));
   if (submitted.size < room.capacity) {
     return NextResponse.json(
       { error: "아직 모든 인원이 시간표를 제출하지 않았습니다." },
@@ -43,7 +44,7 @@ export async function POST(_req: NextRequest, ctx: Params) {
     );
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.roomBid.deleteMany({ where: { roomId: room.id } });
     return tx.room.update({
       where: { id: room.id },
