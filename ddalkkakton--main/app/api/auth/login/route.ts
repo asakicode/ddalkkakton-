@@ -2,58 +2,117 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export async function POST(req: NextRequest) {
+  let body: unknown;
   try {
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "요청 본문이 올바른 JSON 형식이 아닙니다." },
+      { status: 400 },
+    );
+  }
+
+  const {
+    mode,
+    email,
+    username,
+    name,
+    password,
+  } = (body ?? {}) as {
+    mode?: string;
+    email?: string;
+    username?: string;
+    name?: string;
+    password?: string;
+  };
+
+  const safeMode = (mode ?? "").trim();
+  const safeEmail = (email ?? "").trim().toLowerCase();
+  const safeUsername = (username ?? "").trim();
+  const safeName = (name ?? "").trim();
+  const safePassword = (password ?? "").trim();
+
+  if (safeMode === "register") {
+    if (!safeEmail || !safeUsername || !safeName || !safePassword) {
       return NextResponse.json(
-        { error: "요청 본문이 올바른 JSON 형식이 아닙니다." },
+        { error: "이메일, 아이디, 이름, 비밀번호가 모두 필요합니다." },
         { status: 400 },
       );
     }
 
-    const { name, password } = (body ?? {}) as {
-      name?: string;
-      password?: string;
-    };
-
-    const safeName = (name ?? "").trim();
-    const safePassword = (password ?? "").trim();
-
-    if (!safeName || !safePassword) {
+    if (!safeEmail.includes("@") || safeEmail.length < 5) {
       return NextResponse.json(
-        { error: "이름과 비밀번호가 필요합니다." },
+        { error: "유효한 이메일 주소를 입력하세요." },
         { status: 400 },
       );
     }
 
-    // 단순 프로토타입: 같은 이름 + 비밀번호면 같은 유저로 간주
-    let user = await prisma.user.findFirst({
-      where: { name: safeName, password: safePassword },
+    if (safePassword.length < 8) {
+      return NextResponse.json(
+        { error: "비밀번호는 최소 8자 이상이어야 합니다." },
+        { status: 400 },
+      );
+    }
+
+    const existingEmail = await prisma.user.findUnique({ where: { email: safeEmail } });
+    if (existingEmail) {
+      return NextResponse.json(
+        { error: "이미 사용 중인 이메일입니다." },
+        { status: 400 },
+      );
+    }
+    const existingUsername = await prisma.user.findUnique({ where: { username: safeUsername } });
+    if (existingUsername) {
+      return NextResponse.json(
+        { error: "이미 사용 중인 아이디입니다." },
+        { status: 400 },
+      );
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        email: safeEmail,
+        username: safeUsername,
+        name: safeName,
+        password: safePassword,
+      },
     });
 
+    return NextResponse.json({
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      name: user.name,
+      balance: user.balance,
+    });
+  }
+
+  if (safeMode === "login") {
+    if (!safeUsername || !safePassword) {
+      return NextResponse.json(
+        { error: "아이디와 비밀번호를 입력하세요." },
+        { status: 400 },
+      );
+    }
+
+    const user = await prisma.user.findUnique({ where: { username: safeUsername } });
     if (!user) {
-      user = await prisma.user.create({
-        data: {
-          name: safeName,
-          password: safePassword,
-          // balance 기본값 100,000P
-        },
-      });
+      return NextResponse.json({ error: "사용자를 찾을 수 없습니다." }, { status: 404 });
+    }
+
+    if (user.password !== safePassword) {
+      return NextResponse.json({ error: "비밀번호가 일치하지 않습니다." }, { status: 401 });
     }
 
     return NextResponse.json({
       id: user.id,
+      email: user.email,
+      username: user.username,
       name: user.name,
       balance: user.balance,
     });
-  } catch (error) {
-    console.error("[auth/login] unexpected error:", error);
-    return NextResponse.json(
-      { error: "로그인 처리 중 서버 오류가 발생했습니다." },
-      { status: 500 },
-    );
   }
+
+  return NextResponse.json({ error: "요청된 모드를 지원하지 않습니다." }, { status: 400 });
 }
 
