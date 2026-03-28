@@ -5,13 +5,14 @@ import { prisma } from "@/lib/prisma";
 export async function POST(req: NextRequest) {
   const { roomCode, userId } = await req.json();
   const PENALTY = 50000;
+  const normalizedRoomCode = String(roomCode ?? "").trim().toUpperCase();
 
-  if (!roomCode || !userId) {
+  if (!normalizedRoomCode || !userId) {
     return NextResponse.json({ error: "roomCode와 userId가 필요합니다." }, { status: 400 });
   }
 
   const room = await prisma.room.findUnique({
-    where: { code: roomCode },
+    where: { code: normalizedRoomCode },
   });
 
   if (!room || !room.confirmedTime) {
@@ -37,8 +38,8 @@ export async function POST(req: NextRequest) {
     distinct: ["userId"],
   });
 
-  const participantIds = schedules.map((s) => s.userId);
-  const receivers = participantIds.filter((id) => id !== userId);
+  const participantIds = schedules.map((s: { userId: number }) => s.userId);
+  const receivers = participantIds.filter((id: number) => id !== userId);
 
   if (receivers.length === 0) {
     // 받을 사람이 없으면 그냥 차감만

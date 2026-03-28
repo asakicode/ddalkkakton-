@@ -1,156 +1,199 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { allSlotKeys, SCHEDULE_DAYS, SCHEDULE_HOURS } from "@/lib/slot-keys";
-
-type DecisionMode =
-  | "COMMON_PREFERRED"
-  | "COMMON_RANDOM_ZERO"
-  | "COMMON_RANDOM_FALLBACK"
-  | "AUCTION";
+import {
+  resolveRoomAuction,
+  type AuctionCharge,
+  type AuctionParticipant,
+} from "@/lib/auction";
 
 type SchedulePayload = {
   blocked?: string[];
   preferredSlot?: string | null;
+  bidAmount?: number;
 };
 
-function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)]!;
-}
+type LockedRoom = {
+  id: number;
+  confirmedTime: string | null;
+  decisionMode: string | null;
+  auctionWinnerId: number | null;
+  auctionWinningBid: number | null;
+};
 
-function commonFreeSlots(
-  blockedByUser: Set<string>[],
-): string[] {
-  const out: string[] = [];
-  for (const day of SCHEDULE_DAYS) {
-    for (const time of SCHEDULE_HOURS) {
-      const key = `${day}-${time}`;
-      const allFree = blockedByUser.every((set) => !set.has(key));
-      if (allFree) out.push(key);
+function buildLatestParticipants(
+  schedules: Array<{
+    userId: number;
+    data: unknown;
+    user: { balance: number };
+  }>,
+) {
+  const latestByUser = new Map<number, AuctionParticipant>();
+
+  for (const schedule of schedules) {
+    if (latestByUser.has(schedule.userId)) {
+      continue;
     }
+
+    const raw = schedule.data as SchedulePayload;
+    const bidAmount = Number.isFinite(Number(raw.bidAmount))
+      ? Math.max(0, Math.floor(Number(raw.bidAmount)))
+      : 0;
+
+    latestByUser.set(schedule.userId, {
+      userId: schedule.userId,
+      blocked: new Set(raw.blocked ?? []),
+      preferredSlot: raw.preferredSlot?.trim() || null,
+      bidAmount,
+      balance: schedule.user.balance,
+    });
   }
-  return out;
+
+  return Array.from(latestByUser.values());
 }
 
-// 강제 시간 확정 (예치금 경매 알고리즘): POST /api/roulette
+function mergeCharges(charges: AuctionCharge[]) {
+  const merged = new Map<number, number>();
+
+  for (const charge of charges) {
+    merged.set(charge.userId, (merged.get(charge.userId) ?? 0) + charge.amount);
+  }
+
+  return Array.from(merged.entries()).map(([userId, amount]) => ({ userId, amount }));
+}
+
 export async function POST(req: NextRequest) {
   const { roomCode } = await req.json();
   if (!roomCode) {
     return NextResponse.json({ error: "roomCode가 필요합니다." }, { status: 400 });
   }
 
-  const room = await prisma.room.findUnique({
-    where: { code: roomCode },
+  const normalizedCode = String(roomCode).trim().toUpperCase();
+  if (!normalizedCode) {
+    return NextResponse.json({ error: "roomCode가 필요합니다." }, { status: 400 });
+  }
+
+  const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const lockedRooms = await tx.$queryRaw<LockedRoom[]>`
+      SELECT "id", "confirmedTime", "decisionMode", "auctionWinnerId", "auctionWinningBid"
+      FROM "Room"
+      WHERE "code" = ${normalizedCode}
+      FOR UPDATE
+    `;
+
+    const lockedRoom = lockedRooms[0];
+    if (!lockedRoom) {
+      return { kind: "not-found" as const };
+    }
+
+    if (lockedRoom.confirmedTime) {
+      return {
+        kind: "already-confirmed" as const,
+        confirmedTime: lockedRoom.confirmedTime,
+        decisionMode: lockedRoom.decisionMode,
+        auctionWinnerId: lockedRoom.auctionWinnerId,
+        auctionWinningBid: lockedRoom.auctionWinningBid,
+      };
+    }
+
+    const schedules = await tx.schedule.findMany({
+      where: { roomId: lockedRoom.id },
+      include: { user: true },
+      orderBy: { submittedAt: "desc" },
+    });
+
+    if (schedules.length === 0) {
+      return { kind: "no-schedules" as const };
+    }
+
+    const participants = buildLatestParticipants(schedules);
+    let resolution;
+    try {
+      resolution = resolveRoomAuction(participants);
+    } catch (error) {
+      return {
+        kind: "invalid" as const,
+        error: error instanceof Error ? error.message : "빈 시간을 찾을 수 없습니다.",
+      };
+    }
+
+    const charges = mergeCharges(resolution.charges).filter((charge) => charge.amount > 0);
+
+    for (const charge of charges) {
+      await tx.user.update({
+        where: { id: charge.userId },
+        data: {
+          balance: {
+            decrement: charge.amount,
+          },
+        },
+      });
+    }
+
+    const updatedRoom = await tx.room.update({
+      where: { id: lockedRoom.id },
+      data: {
+        confirmedTime: resolution.confirmedTime,
+        decisionMode: resolution.decisionMode,
+        auctionWinnerId: resolution.winnerUserId,
+        auctionWinningBid: resolution.winningBid,
+        confirmedAt: new Date(),
+      },
+    });
+
+    const balances = charges.length
+      ? await tx.user.findMany({
+          where: { id: { in: charges.map((charge) => charge.userId) } },
+          select: { id: true, balance: true },
+        })
+      : [];
+
+    return {
+      kind: "confirmed" as const,
+      confirmedTime: updatedRoom.confirmedTime,
+      decisionMode: updatedRoom.decisionMode,
+      auctionWinnerId: updatedRoom.auctionWinnerId,
+      auctionWinningBid: updatedRoom.auctionWinningBid,
+      chargedUsers: charges.map((charge) => ({
+        userId: charge.userId,
+        deductedAmount: charge.amount,
+        balance:
+          balances.find((balance: { id: number; balance: number }) => balance.id === charge.userId)
+            ?.balance ?? null,
+      })),
+      eligibleBidderCount: resolution.eligibleBidderCount,
+    };
   });
 
-  if (!room) {
+  if (result.kind === "not-found") {
     return NextResponse.json({ error: "방을 찾을 수 없습니다." }, { status: 404 });
   }
 
-  if (room.confirmedTime) {
-    return NextResponse.json({
-      status: "already-confirmed",
-      confirmedTime: room.confirmedTime,
-      decisionMode: room.decisionMode,
-    });
-  }
-
-  const schedules = await prisma.schedule.findMany({
-    where: { roomId: room.id },
-    include: { user: true },
-    orderBy: { submittedAt: "desc" },
-  });
-
-  if (schedules.length === 0) {
+  if (result.kind === "no-schedules") {
     return NextResponse.json({ error: "제출된 시간표가 없습니다." }, { status: 400 });
   }
 
-  const latestByUser = new Map<
-    number,
-    { blocked: Set<string>; preferredSlot: string | null; balance: number }
-  >();
+  if (result.kind === "invalid") {
+    return NextResponse.json({ error: result.error }, { status: 400 });
+  }
 
-  for (const s of schedules) {
-    if (latestByUser.has(s.userId)) continue;
-    const raw = s.data as SchedulePayload;
-    latestByUser.set(s.userId, {
-      blocked: new Set(raw.blocked ?? []),
-      preferredSlot: raw.preferredSlot?.trim() || null,
-      balance: s.user.balance,
+  if (result.kind === "already-confirmed") {
+    return NextResponse.json({
+      status: "already-confirmed",
+      confirmedTime: result.confirmedTime,
+      decisionMode: result.decisionMode,
+      auctionWinnerId: result.auctionWinnerId,
+      auctionWinningBid: result.auctionWinningBid,
     });
   }
 
-  const participants = Array.from(latestByUser.entries()).map(([userId, v]) => ({
-    userId,
-    ...v,
-  }));
-
-  const blockedByUser = participants.map((p) => p.blocked);
-  const common = commonFreeSlots(blockedByUser);
-  const allKeys = allSlotKeys();
-
-  let chosen: string;
-  let decisionMode: DecisionMode;
-
-  if (common.length > 0) {
-    const maxBalance = Math.max(...participants.map((p) => p.balance));
-
-    if (maxBalance === 0) {
-      chosen = pickRandom(common);
-      decisionMode = "COMMON_RANDOM_ZERO";
-    } else {
-      const topUsers = participants.filter((p) => p.balance === maxBalance);
-      const winner = pickRandom(topUsers);
-      if (
-        winner.preferredSlot &&
-        common.includes(winner.preferredSlot)
-      ) {
-        chosen = winner.preferredSlot;
-        decisionMode = "COMMON_PREFERRED";
-      } else {
-        chosen = pickRandom(common);
-        decisionMode = "COMMON_RANDOM_FALLBACK";
-      }
-    }
-  } else {
-    const maxBalance = Math.max(...participants.map((p) => p.balance));
-    const topUsers =
-      maxBalance === 0
-        ? participants
-        : participants.filter((p) => p.balance === maxBalance);
-    const winner = pickRandom(topUsers);
-
-    let freeForWinner = allKeys.filter((k) => !winner.blocked.has(k));
-    if (freeForWinner.length === 0) {
-      const unionFree = new Set<string>();
-      for (const p of participants) {
-        for (const k of allKeys) {
-          if (!p.blocked.has(k)) unionFree.add(k);
-        }
-      }
-      freeForWinner = Array.from(unionFree);
-    }
-    if (freeForWinner.length === 0) {
-      return NextResponse.json(
-        { error: "빈 시간을 찾을 수 없습니다." },
-        { status: 400 },
-      );
-    }
-    chosen = pickRandom(freeForWinner);
-    decisionMode = "AUCTION";
-  }
-
-  const updatedRoom = await prisma.room.update({
-    where: { id: room.id },
-    data: {
-      confirmedTime: chosen,
-      decisionMode,
-      confirmedAt: new Date(),
-    },
-  });
-
   return NextResponse.json({
     status: "confirmed",
-    confirmedTime: updatedRoom.confirmedTime,
-    decisionMode: updatedRoom.decisionMode,
+    confirmedTime: result.confirmedTime,
+    decisionMode: result.decisionMode,
+    auctionWinnerId: result.auctionWinnerId,
+    auctionWinningBid: result.auctionWinningBid,
+    chargedUsers: result.chargedUsers,
+    eligibleBidderCount: result.eligibleBidderCount,
   });
 }

@@ -25,6 +25,9 @@ interface RoomStatus {
   decisionMode: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
+  auctionWinnerId?: number | null;
+  auctionWinningBid?: number | null;
+  leadingBid?: number | null;
 }
 
 const POLL_MS = 2500;
@@ -38,6 +41,19 @@ function RoulettePageInner() {
   const [roomStatus, setRoomStatus] = useState<RoomStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+
+  const refreshUser = async (id: number) => {
+    try {
+      const res = await fetch(`/api/user/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentUser(data);
+        localStorage.setItem("currentUser", JSON.stringify(data));
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
 
   // localStorage / URL은 클라이언트 마운트 이후에만 반영 → 하이드레이션과 동일한 초기 UI 유지
   useEffect(() => {
@@ -71,7 +87,13 @@ function RoulettePageInner() {
     const applyRoomPayload = (data: RoomStatus) => {
       const slot =
         data.result ?? data.confirmedTime ?? data.confirmedSlot ?? null;
-      setRoomStatus(data);
+      setRoomStatus((prev) => {
+        const wasCompleted = prev?.status === "completed";
+        if (data.status === "completed" && !wasCompleted && currentUser?.id) {
+          refreshUser(currentUser.id);
+        }
+        return data;
+      });
       if (slot) {
         setSelectedSlot(slot);
         setPhase("locked");
@@ -92,7 +114,7 @@ function RoulettePageInner() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [roomCode]);
+  }, [roomCode, currentUser?.id]);
 
   const canSpin = useMemo(() => {
     if (!roomStatus) return false;
@@ -118,6 +140,10 @@ function RoulettePageInner() {
       setPhase("ready");
       setError(data.error || "룰렛 실행 중 오류가 발생했습니다.");
       return;
+    }
+
+    if (currentUser?.id) {
+      refreshUser(currentUser.id);
     }
 
     if (data.status === "already-confirmed") {
@@ -288,6 +314,13 @@ function RoulettePageInner() {
                   {selectedSlot}
                 </div>
               </div>
+
+              {roomStatus?.auctionWinningBid != null && roomStatus.auctionWinningBid > 0 && (
+                <div className="text-sm font-medium text-warning">
+                  낙찰가: {roomStatus.auctionWinningBid.toLocaleString()}P
+                  {roomStatus.auctionWinnerId === currentUser?.id ? " (내 입찰 성공!)" : ""}
+                </div>
+              )}
 
               <div className="flex items-center justify-center gap-2 text-xl font-bold text-destructive">
                 <Skull className="h-6 w-6" />

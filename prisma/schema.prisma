@@ -24,6 +24,8 @@ model Room {
   hostId         Int
   confirmedTime  String?
   decisionMode   String?
+  auctionWinnerId Int?
+  auctionWinningBid Int?
   confirmedAt    DateTime?
   createdAt      DateTime  @default(now())
 
