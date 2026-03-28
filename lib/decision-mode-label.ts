@@ -1,5 +1,9 @@
 export function decisionModeLabel(mode: string | null | undefined): string {
   switch (mode) {
+    case "BID_POOL":
+      return "후보별 배팅 합산 (최고 합 시간 낙찰)";
+    case "BID_ALL_ZERO":
+      return "전원 0원 배팅 → 후보 중 랜덤 (차감 없음)";
     case "COMMON_PREFERRED":
       return "지망 반영 (고액 예치금)";
     case "COMMON_RANDOM_ZERO":

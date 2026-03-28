@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,10 @@ interface RoomStatus {
   decisionMode: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
+  candidateSlots?: string[];
+  auctionStartedAt?: string | null;
+  auctionReadyCount?: number;
+  auctionRequiredCount?: number;
 }
 
 const POLL_MS = 2500;
@@ -60,26 +64,33 @@ function RoomPageInner() {
     }
   }, [searchParams]);
 
+  const fetchRoomStatus = useCallback(async () => {
+    if (!roomCode) return;
+    const uid = currentUser?.id;
+    const q = uid != null ? `?userId=${encodeURIComponent(String(uid))}` : "";
+    const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}${q}`);
+    if (!res.ok) return;
+    const data = (await res.json()) as RoomStatus;
+    setRoomStatus(data);
+  }, [roomCode, currentUser?.id]);
+
   useEffect(() => {
     if (!roomCode) return;
 
     let cancelled = false;
 
-    const fetchStatus = async () => {
-      const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}`);
-      if (!res.ok || cancelled) return;
-      const data = (await res.json()) as RoomStatus;
+    const tick = async () => {
       if (cancelled) return;
-      setRoomStatus(data);
+      await fetchRoomStatus();
     };
 
-    void fetchStatus();
-    const timer = setInterval(() => void fetchStatus(), POLL_MS);
+    void tick();
+    const timer = setInterval(() => void tick(), POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [roomCode]);
+  }, [roomCode, fetchRoomStatus]);
 
   useEffect(() => {
     if (!roomCode || !roomStatus?.result || redirectedToRoulette.current) return;
@@ -123,7 +134,11 @@ function RoomPageInner() {
   const connectRoom = async () => {
     if (!joinCode.trim()) return;
     const code = joinCode.trim();
-    const res = await fetch(`/api/room/${encodeURIComponent(code)}`);
+    const q =
+      currentUser?.id != null
+        ? `?userId=${encodeURIComponent(String(currentUser.id))}`
+        : "";
+    const res = await fetch(`/api/room/${encodeURIComponent(code)}${q}`);
     if (!res.ok) {
       setError("유효하지 않은 방 코드입니다.");
       return;
@@ -268,6 +283,12 @@ function RoomPageInner() {
               </p>
             </div>
 
+            {allReady && (
+              <p className="rounded-lg border border-border bg-muted/40 p-3 text-center text-sm text-muted-foreground">
+                배팅은 룰렛(실시간 경매) 화면에서 진행합니다. 아래 버튼으로 이동하세요.
+              </p>
+            )}
+
             <Button
               disabled={!allReady}
               className={cn(
@@ -279,7 +300,7 @@ function RoomPageInner() {
             >
               <Zap className="h-5 w-5" />
               {allReady
-                ? "운명의 시간 추첨하기"
+                ? "실시간 예치금 경매 화면으로"
                 : `${(roomStatus?.capacity ?? memberCount) - (roomStatus?.submittedCount ?? 0)}명 더 필요합니다`}
             </Button>
           </div>

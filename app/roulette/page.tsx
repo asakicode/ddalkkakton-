@@ -1,14 +1,16 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
-import { Target, AlertTriangle, Lock, Calendar, Skull } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Target, AlertTriangle, Lock, Calendar, Skull, Gavel } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { decisionModeLabel } from "@/lib/decision-mode-label";
+import { formatSlotLabel } from "@/lib/candidate-slots";
 
-type Phase = "ready" | "spinning" | "locked";
+type Phase = "pre" | "bidding" | "locked";
 
 interface CurrentUser {
   id: number;
@@ -23,23 +25,34 @@ interface RoomStatus {
   confirmedTime: string | null;
   confirmedSlot: string | null;
   decisionMode: string | null;
+  auctionStartedAt: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
+  candidateSlots?: string[];
+  auctionReadyCount?: number;
+  auctionRequiredCount?: number;
+  slotTotals?: Record<string, number>;
+  myAuctionBid?: {
+    slotKey: string | null;
+    bidAmount: number;
+    isReady: boolean;
+  } | null;
 }
 
-const POLL_MS = 2500;
+const POLL_MS = 1100;
 
 function RoulettePageInner() {
   const searchParams = useSearchParams();
   const [mounted, setMounted] = useState(false);
-  const [phase, setPhase] = useState<Phase>("ready");
+  const [phase, setPhase] = useState<Phase>("pre");
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [roomStatus, setRoomStatus] = useState<RoomStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [draftBySlot, setDraftBySlot] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
 
-  // localStorage / URL은 클라이언트 마운트 이후에만 반영 → 하이드레이션과 동일한 초기 UI 유지
   useEffect(() => {
     try {
       const codeFromQuery = searchParams.get("code");
@@ -55,7 +68,7 @@ function RoulettePageInner() {
         try {
           setCurrentUser(JSON.parse(storedUser) as CurrentUser);
         } catch {
-          // ignore
+          /* ignore */
         }
       }
     } finally {
@@ -63,80 +76,159 @@ function RoulettePageInner() {
     }
   }, [searchParams]);
 
+  const refreshUserBalance = useCallback(async () => {
+    let uid = currentUser?.id;
+    if (uid == null) {
+      try {
+        const raw = localStorage.getItem("currentUser");
+        if (raw) uid = (JSON.parse(raw) as CurrentUser).id;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (uid == null) return;
+    const ur = await fetch(`/api/user/${uid}`);
+    if (!ur.ok) return;
+    const u = (await ur.json()) as CurrentUser;
+    localStorage.setItem("currentUser", JSON.stringify(u));
+    setCurrentUser(u);
+  }, [currentUser?.id]);
+
+  const fetchStatus = useCallback(async () => {
+    if (!roomCode) return;
+    const uid = currentUser?.id;
+    const q = uid != null ? `?userId=${encodeURIComponent(String(uid))}` : "";
+    const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}${q}`);
+    if (!res.ok) return;
+    const data = (await res.json()) as RoomStatus;
+    setRoomStatus(data);
+
+    const slot =
+      data.result ?? data.confirmedTime ?? data.confirmedSlot ?? null;
+    if (slot) {
+      setSelectedSlot(slot);
+      setPhase("locked");
+    } else if (data.auctionStartedAt) {
+      setPhase("bidding");
+    } else {
+      setPhase("pre");
+    }
+  }, [roomCode, currentUser?.id]);
+
   useEffect(() => {
     if (!roomCode) return;
 
     let cancelled = false;
 
-    const applyRoomPayload = (data: RoomStatus) => {
-      const slot =
-        data.result ?? data.confirmedTime ?? data.confirmedSlot ?? null;
-      setRoomStatus(data);
-      if (slot) {
-        setSelectedSlot(slot);
-        setPhase("locked");
-      }
-    };
-
-    const fetchStatus = async () => {
-      const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}`);
-      if (!res.ok || cancelled) return;
-      const data = (await res.json()) as RoomStatus;
+    const tick = async () => {
       if (cancelled) return;
-      applyRoomPayload(data);
+      await fetchStatus();
     };
 
-    void fetchStatus();
-    const timer = setInterval(() => void fetchStatus(), POLL_MS);
+    void tick();
+    const timer = setInterval(() => void tick(), POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [roomCode]);
+  }, [roomCode, fetchStatus]);
 
-  const canSpin = useMemo(() => {
+  const canStartAuction = useMemo(() => {
     if (!roomStatus) return false;
     return roomStatus.submittedCount >= roomStatus.capacity;
   }, [roomStatus]);
 
-  const startSpin = async () => {
+  const startAuction = async () => {
     if (!roomCode) {
-      setError("방 코드가 없습니다. 방 페이지에서 다시 입장해주세요.");
+      setError("방 코드가 없습니다.");
       return;
     }
     setError(null);
-    setPhase("spinning");
-
-    const res = await fetch("/api/roulette", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ roomCode }),
-    });
-
-    const data = await res.json();
+    setBusy(true);
+    const res = await fetch(
+      `/api/room/${encodeURIComponent(roomCode)}/auction/start`,
+      { method: "POST" },
+    );
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setPhase("ready");
-      setError(data.error || "룰렛 실행 중 오류가 발생했습니다.");
+      setError(data.error || "경매를 시작할 수 없습니다.");
+      setBusy(false);
       return;
     }
+    await fetchStatus();
+    setBusy(false);
+  };
 
-    if (data.status === "already-confirmed") {
-      setSelectedSlot(
-        (data.confirmedTime as string) ?? (data.confirmedSlot as string),
-      );
-      setPhase("locked");
+  const submitSlotBid = async (slotKey: string) => {
+    if (!roomCode || !currentUser) {
+      setError("로그인 후 다시 시도해주세요.");
       return;
     }
-
-    const time =
-      (data.confirmedTime as string) ?? (data.confirmedSlot as string);
-    if (data.status === "confirmed" && time) {
-      setSelectedSlot(time);
-      setPhase("locked");
+    const raw = draftBySlot[slotKey] ?? "0";
+    const amount = Math.max(0, Math.floor(Number(raw) || 0));
+    if (amount > currentUser.balance) {
+      setError(`예치금이 부족합니다. (입력 ${amount.toLocaleString()}P)`);
       return;
     }
+    setError(null);
+    setBusy(true);
+    const res = await fetch(
+      `/api/room/${encodeURIComponent(roomCode)}/auction/bid`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          slotKey,
+          bidAmount: amount,
+          confirm: true,
+        }),
+      },
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data.error || "확정에 실패했습니다.");
+      setBusy(false);
+      return;
+    }
+    await refreshUserBalance();
+    await fetchStatus();
+    if (data.status === "confirmed") {
+      if (data.confirmedTime) setSelectedSlot(data.confirmedTime);
+    }
+    setBusy(false);
+  };
 
-    setPhase("ready");
+  const submitAnywhere = async () => {
+    if (!roomCode || !currentUser) {
+      setError("로그인 후 다시 시도해주세요.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    const res = await fetch(
+      `/api/room/${encodeURIComponent(roomCode)}/auction/bid`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          anywhere: true,
+        }),
+      },
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data.error || "처리에 실패했습니다.");
+      setBusy(false);
+      return;
+    }
+    await refreshUserBalance();
+    await fetchStatus();
+    if (data.status === "confirmed") {
+      if (data.confirmedTime) setSelectedSlot(data.confirmedTime);
+    }
+    setBusy(false);
   };
 
   const handlePenalty = async () => {
@@ -175,13 +267,19 @@ function RoulettePageInner() {
         <Target className="h-5 w-5 text-primary" />
       </div>
       <div>
-        <h1 className="text-xl font-bold text-foreground">운명의 룰렛</h1>
-            <p className="text-sm text-muted-foreground">
-              예치금 경매 규칙으로 팀플 시간이 확정됩니다
-            </p>
+        <h1 className="text-xl font-bold text-foreground">실시간 예치금 경매</h1>
+        <p className="text-sm text-muted-foreground">
+          후보별 확정 배팅 합이 가장 큰 시간이 낙찰됩니다. 전원 0원이면 후보 중 랜덤입니다.
+        </p>
       </div>
     </div>
   );
+
+  const candidates = roomStatus?.candidateSlots ?? [];
+  const myReady = roomStatus?.myAuctionBid?.isReady ?? false;
+  const readyN = roomStatus?.auctionReadyCount ?? 0;
+  const needN = roomStatus?.auctionRequiredCount ?? 0;
+  const totals = roomStatus?.slotTotals ?? {};
 
   if (!mounted) {
     return (
@@ -212,9 +310,9 @@ function RoulettePageInner() {
             />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-foreground">운명의 룰렛</h1>
+            <h1 className="text-xl font-bold text-foreground">실시간 예치금 경매</h1>
             <p className="text-sm text-muted-foreground">
-              예치금 경매 규칙으로 팀플 시간이 확정됩니다
+              후보별 확정 배팅 합이 가장 큰 시간이 낙찰됩니다. 전원 0원이면 후보 중 랜덤입니다.
             </p>
           </div>
         </div>
@@ -226,12 +324,12 @@ function RoulettePageInner() {
         )}
 
         <div className="mb-4 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-          방 코드: <span className="font-mono font-semibold text-foreground">{roomCode ?? "-"}</span> / 제출
-          인원: {roomStatus?.submittedCount ?? 0}/{roomStatus?.capacity ?? "-"}
+          방 코드: <span className="font-mono font-semibold text-foreground">{roomCode ?? "-"}</span>{" "}
+          / 제출 {roomStatus?.submittedCount ?? 0}/{roomStatus?.capacity ?? "-"}
           {roomStatus?.status && (
             <>
               {" "}
-              / 상태:{" "}
+              /{" "}
               <span className="font-medium text-foreground">
                 {roomStatus.status === "waiting"
                   ? "대기 중"
@@ -241,62 +339,136 @@ function RoulettePageInner() {
               </span>
             </>
           )}
+          {roomStatus?.auctionStartedAt && !roomStatus.confirmedTime && (
+            <p className="mt-2 font-medium text-foreground">
+              현재 {readyN}/{needN}명 확정 완료
+            </p>
+          )}
           {roomStatus?.decisionMode && roomStatus.status === "completed" && (
-            <>
-              {" "}
-              / 확정 방식:{" "}
+            <p className="mt-1 text-xs">
+              확정 방식:{" "}
               <span className="font-medium text-foreground">
                 {decisionModeLabel(roomStatus.decisionMode)}
               </span>
-            </>
+            </p>
           )}
         </div>
 
         <div
           className={cn(
-            "relative mb-8 overflow-hidden rounded-2xl border-2 p-8 text-center transition-all",
+            "relative mb-8 overflow-hidden rounded-2xl border-2 p-6 transition-all",
             phase === "locked" ? "animate-siren border-destructive bg-destructive/10" : "border-border bg-card",
           )}
         >
-          {phase === "ready" && (
-            <div className="space-y-4">
-              <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-secondary">
-                <Calendar className="h-12 w-12 text-muted-foreground" />
-              </div>
-              <p className="text-lg text-muted-foreground">조건 충족 후 룰렛을 실행하세요.</p>
-            </div>
-          )}
-
-          {phase === "spinning" && (
-            <div className="space-y-4">
-              <div className="text-4xl font-bold text-warning animate-pulse">추첨 중...</div>
-            </div>
-          )}
-
           {phase === "locked" && selectedSlot && (
-            <div className="space-y-6">
+            <div className="space-y-6 text-center">
               <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-destructive animate-pulse">
                 <Lock className="h-10 w-10 text-destructive-foreground" />
               </div>
-
               <div>
-                <p className="mb-2 text-sm font-medium text-destructive">강제 확정</p>
+                <p className="mb-2 text-sm font-medium text-destructive">낙찰 · 강제 확정</p>
                 <div
-                  className="text-4xl font-black text-destructive"
+                  className="text-3xl font-black text-destructive"
                   suppressHydrationWarning
                 >
                   {selectedSlot}
                 </div>
               </div>
-
-              <div className="flex items-center justify-center gap-2 text-xl font-bold text-destructive">
+              <div className="flex items-center justify-center gap-2 text-lg font-bold text-destructive">
                 <Skull className="h-6 w-6" />
                 탈출 불가
                 <Skull className="h-6 w-6" />
               </div>
             </div>
           )}
+
+          {phase !== "locked" && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Gavel className="h-5 w-5 shrink-0 text-primary" />
+                <p className="text-sm">
+                  {phase === "pre" && "경매를 시작하면 공통 후보 시간이 열립니다."}
+                  {phase === "bidding" &&
+                    (busy ? "처리 중…" : "각 시간에 배팅 금액을 입력한 뒤 ‘확정’을 누르세요.")}
+                </p>
+              </div>
+
+              {phase === "bidding" &&
+                roomStatus?.auctionStartedAt &&
+                candidates.length > 0 && (
+                  <ul className="space-y-3">
+                    {candidates.map((key) => (
+                      <li
+                        key={key}
+                        className="flex flex-col gap-2 rounded-lg border border-border bg-background/60 p-3 sm:flex-row sm:items-end sm:justify-between"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="font-mono text-sm font-semibold text-foreground">
+                            {formatSlotLabel(key)}
+                          </p>
+                          {totals[key] != null && totals[key]! > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              확정 배팅 합계: {totals[key]!.toLocaleString()}P
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-end gap-2">
+                          <div className="w-28">
+                            <label className="sr-only" htmlFor={`amt-${key}`}>
+                              배팅 P
+                            </label>
+                            <Input
+                              id={`amt-${key}`}
+                              type="number"
+                              min={0}
+                              disabled={myReady || busy}
+                              value={draftBySlot[key] ?? ""}
+                              placeholder="0"
+                              className="font-mono"
+                              onChange={(e) =>
+                                setDraftBySlot((prev) => ({
+                                  ...prev,
+                                  [key]: e.target.value,
+                                }))
+                              }
+                            />
+                          </div>
+                          <Button
+                            size="sm"
+                            disabled={myReady || busy || !currentUser}
+                            onClick={() => void submitSlotBid(key)}
+                          >
+                            확정
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+              {phase === "bidding" &&
+                roomStatus?.auctionStartedAt &&
+                candidates.length === 0 && (
+                  <p className="text-sm text-destructive">공통 후보 시간이 없습니다.</p>
+                )}
+            </div>
+          )}
         </div>
+
+        {phase === "bidding" &&
+          roomStatus?.auctionStartedAt &&
+          !roomStatus.confirmedTime && (
+            <div className="mb-6">
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={myReady || busy || !currentUser}
+                onClick={() => void submitAnywhere()}
+              >
+                어디든 상관없음 (0원 · 즉시 확정)
+              </Button>
+            </div>
+          )}
 
         <div
           className={cn(
@@ -304,30 +476,54 @@ function RoulettePageInner() {
             phase === "locked" ? "border-destructive bg-destructive/20" : "border-warning/50 bg-warning/10",
           )}
         >
-          <AlertTriangle className={cn("h-6 w-6 shrink-0", phase === "locked" ? "text-destructive" : "text-warning")} />
+          <AlertTriangle
+            className={cn("h-6 w-6 shrink-0", phase === "locked" ? "text-destructive" : "text-warning")}
+          />
           <div>
             <p className={cn("font-bold", phase === "locked" ? "text-destructive" : "text-warning")}>
               불참 시 예치금 50,000P 차감
             </p>
-            <p className="text-sm text-muted-foreground">불참자의 벌금은 정상 참여자에게 즉시 분배됩니다.</p>
+            <p className="text-sm text-muted-foreground">
+              낙찰 시간에 건 배팅은 확정 시에만 예치금에서 차감됩니다.
+            </p>
           </div>
         </div>
 
-        {phase !== "locked" && (
+        {phase !== "locked" && !roomStatus?.auctionStartedAt && (
           <Button
-            onClick={startSpin}
-            disabled={!canSpin || phase === "spinning"}
+            onClick={() => void startAuction()}
+            disabled={!canStartAuction || busy}
             className="w-full gap-2 py-6 text-lg font-bold bg-destructive hover:bg-destructive/90"
             size="lg"
           >
             <Target className="h-5 w-5" />
-            {canSpin ? "운명의 시간 추첨하기" : "아직 모든 팀원이 제출하지 않았습니다"}
+            {canStartAuction
+              ? "실시간 예치금 경매 시작"
+              : "아직 모든 팀원이 제출하지 않았습니다"}
           </Button>
+        )}
+
+        {myReady && !roomStatus?.confirmedTime && (
+          <p className="mt-3 text-center text-sm font-medium text-success">
+            내 배팅이 확정되었습니다. 팀원 확정을 기다리는 중입니다.
+          </p>
+        )}
+
+        {!currentUser && phase !== "locked" && (
+          <p className="mt-3 text-center text-xs text-muted-foreground">
+            배팅하려면 내 시간표 페이지에서 로그인한 뒤 새로고침하세요.
+          </p>
         )}
 
         {phase === "locked" && (
           <div className="space-y-3">
-            <Button className="w-full gap-2 py-6 text-lg font-bold" size="lg" onClick={() => window.location.href = "/shop"}>
+            <Button
+              className="w-full gap-2 py-6 text-lg font-bold"
+              size="lg"
+              onClick={() => {
+                window.location.href = "/shop";
+              }}
+            >
               <Calendar className="h-5 w-5" />
               캘린더에 일정 추가
             </Button>

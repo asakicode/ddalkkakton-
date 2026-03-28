@@ -1,21 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { computeCandidateSlots } from "@/lib/room-schedule-helpers";
 
 interface Params {
-  // Next 버전에 따라 params가 Promise로 올 수 있어 방어적으로 처리
   params: { code: string } | Promise<{ code: string }>;
 }
 
-export async function GET(_req: NextRequest, { params }: Params) {
+export async function GET(req: NextRequest, { params }: Params) {
   const resolvedParams = await Promise.resolve(params as any);
   const code = ((resolvedParams?.code as string | undefined) ?? "").trim();
-  const normalized = code.toUpperCase();
 
-  if (!normalized) {
+  if (!code) {
     return NextResponse.json({ error: "방 코드가 필요합니다." }, { status: 400 });
   }
   const room = await prisma.room.findUnique({
-    where: { code: normalized },
+    where: { code },
     include: {
       schedules: {
         select: { userId: true },
@@ -40,17 +39,71 @@ export async function GET(_req: NextRequest, { params }: Params) {
     status = "waiting";
   }
 
+  const candidateSlots =
+    status === "ready" || status === "completed"
+      ? await computeCandidateSlots(prisma, room.id)
+      : [];
+
+  const auctionBids = await prisma.roomBid.findMany({ where: { roomId: room.id } });
+
+  let auctionReadyCount = 0;
+  let auctionRequiredCount = 0;
+  const slotTotals: Record<string, number> = {};
+
+  if (room.auctionStartedAt && !room.confirmedTime) {
+    auctionRequiredCount = submittedCount;
+    for (const uid of submittedUserIds) {
+      const b = auctionBids.find((x) => x.userId === uid);
+      if (b?.isReady) auctionReadyCount += 1;
+    }
+
+    for (const b of auctionBids) {
+      if (
+        !b.isReady ||
+        !b.slotKey ||
+        b.bidAmount <= 0 ||
+        !candidateSlots.includes(b.slotKey)
+      ) {
+        continue;
+      }
+      slotTotals[b.slotKey] = (slotTotals[b.slotKey] ?? 0) + b.bidAmount;
+    }
+  }
+
+  const qUser = req.nextUrl.searchParams.get("userId");
+  let myAuctionBid: {
+    slotKey: string | null;
+    bidAmount: number;
+    isReady: boolean;
+  } | null = null;
+  const uid = qUser ? Number(qUser) : NaN;
+  if (!Number.isNaN(uid)) {
+    const row = auctionBids.find((b) => b.userId === uid);
+    if (row) {
+      myAuctionBid = {
+        slotKey: row.slotKey,
+        bidAmount: row.bidAmount,
+        isReady: row.isReady,
+      };
+    }
+  }
+
   return NextResponse.json({
     code: room.code,
     capacity: room.capacity,
     hostId: room.hostId,
     confirmedTime: room.confirmedTime,
     decisionMode: room.decisionMode,
+    auctionStartedAt: room.auctionStartedAt?.toISOString() ?? null,
     /** 하위 호환 */
     confirmedSlot: room.confirmedTime,
     result,
     submittedCount,
     status,
+    candidateSlots,
+    auctionReadyCount,
+    auctionRequiredCount,
+    slotTotals,
+    myAuctionBid,
   });
 }
-
