@@ -1,16 +1,12 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Target, AlertTriangle, Lock, Calendar, Skull, Gavel } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Calendar, Lock, Skull, Target } from "lucide-react";
 import { decisionModeLabel } from "@/lib/decision-mode-label";
 import { formatSlotLabel } from "@/lib/candidate-slots";
-
-type Phase = "pre" | "bidding" | "locked";
 
 interface CurrentUser {
   id: number;
@@ -30,44 +26,23 @@ interface RoomStatus {
   status: "waiting" | "ready" | "completed";
   auctionWinnerId?: number | null;
   auctionWinningBid?: number | null;
-  leadingBid?: number | null;
-  candidateSlots?: string[];
-  auctionReadyCount?: number;
-  auctionRequiredCount?: number;
-  slotTotals?: Record<string, number>;
-  myAuctionBid?: {
-    slotKey: string | null;
-    bidAmount: number;
-    isReady: boolean;
-  } | null;
 }
 
-const POLL_MS = 1100;
+type Phase = "waiting" | "drawing" | "result";
+
+const POLL_MS = 1500;
 
 function RoulettePageInner() {
   const searchParams = useSearchParams();
   const [mounted, setMounted] = useState(false);
-  const [phase, setPhase] = useState<Phase>("pre");
-  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [roomStatus, setRoomStatus] = useState<RoomStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<Phase>("waiting");
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [draftBySlot, setDraftBySlot] = useState<Record<string, string>>({});
-
-  const refreshUser = async (id: number) => {
-    try {
-      const res = await fetch(`/api/user/${id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentUser(data);
-        localStorage.setItem("currentUser", JSON.stringify(data));
-      }
-    } catch (e) {
-      // ignore
-    }
-  };
+  const requestedRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -84,7 +59,7 @@ function RoulettePageInner() {
         try {
           setCurrentUser(JSON.parse(storedUser) as CurrentUser);
         } catch {
-          /* ignore */
+          // ignore
         }
       }
     } finally {
@@ -99,37 +74,71 @@ function RoulettePageInner() {
         const raw = localStorage.getItem("currentUser");
         if (raw) uid = (JSON.parse(raw) as CurrentUser).id;
       } catch {
-        /* ignore */
+        // ignore
       }
     }
     if (uid == null) return;
-    const ur = await fetch(`/api/user/${uid}`);
-    if (!ur.ok) return;
-    const u = (await ur.json()) as CurrentUser;
-    localStorage.setItem("currentUser", JSON.stringify(u));
-    setCurrentUser(u);
+
+    const res = await fetch(`/api/user/${uid}`);
+    if (!res.ok) return;
+    const data = (await res.json()) as CurrentUser;
+    setCurrentUser(data);
+    localStorage.setItem("currentUser", JSON.stringify(data));
   }, [currentUser?.id]);
 
   const fetchStatus = useCallback(async () => {
-    if (!roomCode) return;
+    if (!roomCode) return null;
+
     const uid = currentUser?.id;
     const q = uid != null ? `?userId=${encodeURIComponent(String(uid))}` : "";
     const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}${q}`);
-    if (!res.ok) return;
+    if (!res.ok) return null;
+
     const data = (await res.json()) as RoomStatus;
     setRoomStatus(data);
 
-    const slot =
-      data.result ?? data.confirmedTime ?? data.confirmedSlot ?? null;
+    const slot = data.result ?? data.confirmedTime ?? data.confirmedSlot ?? null;
     if (slot) {
       setSelectedSlot(slot);
-      setPhase("locked");
-    } else if (data.auctionStartedAt) {
-      setPhase("bidding");
+      setPhase("result");
+    } else if (data.submittedCount >= data.capacity) {
+      setPhase("drawing");
     } else {
-      setPhase("pre");
+      setPhase("waiting");
     }
+
+    return data;
   }, [roomCode, currentUser?.id]);
+
+  const startAuction = useCallback(async () => {
+    if (!roomCode || requestedRef.current) {
+      return;
+    }
+
+    requestedRef.current = true;
+    setBusy(true);
+    setError(null);
+
+    const res = await fetch(`/api/room/${encodeURIComponent(roomCode)}/auction/start`, {
+      method: "POST",
+    });
+    const data = await res.json().catch(() => ({} as { error?: string; confirmedTime?: string }));
+
+    if (!res.ok) {
+      requestedRef.current = false;
+      setBusy(false);
+      setError(data.error || "추첨 결과를 계산할 수 없습니다.");
+      return;
+    }
+
+    await refreshUserBalance();
+    if (data.confirmedTime) {
+      setSelectedSlot(data.confirmedTime);
+      setPhase("result");
+    }
+    await fetchStatus();
+    setBusy(false);
+  }, [roomCode, fetchStatus, refreshUserBalance]);
 
   useEffect(() => {
     if (!roomCode) return;
@@ -138,10 +147,14 @@ function RoulettePageInner() {
 
     const tick = async () => {
       if (cancelled) return;
-      const previousStatus = roomStatus?.status;
-      await fetchStatus();
-      if (!cancelled && previousStatus !== "completed" && roomStatus?.status === "completed" && currentUser?.id) {
-        void refreshUser(currentUser.id);
+      const data = await fetchStatus();
+      if (
+        !cancelled &&
+        data &&
+        !data.confirmedTime &&
+        data.submittedCount >= data.capacity
+      ) {
+        await startAuction();
       }
     };
 
@@ -151,189 +164,41 @@ function RoulettePageInner() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [roomCode, currentUser?.id, fetchStatus, refreshUser, roomStatus?.status]);
-
-  const canStartAuction = useMemo(() => {
-    if (!roomStatus) return false;
-    return roomStatus.submittedCount >= roomStatus.capacity;
-  }, [roomStatus]);
-
-  const startAuction = async () => {
-    if (!roomCode) {
-      setError("방 코드가 없습니다.");
-      return;
-    }
-    setError(null);
-    setBusy(true);
-    const res = await fetch(
-      `/api/room/${encodeURIComponent(roomCode)}/auction/start`,
-      { method: "POST" },
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data.error || "경매를 시작할 수 없습니다.");
-      setBusy(false);
-      return;
-    }
-    await fetchStatus();
-    setBusy(false);
-  };
-
-  const submitSlotBid = async (slotKey: string) => {
-    if (!roomCode || !currentUser) {
-      setError("로그인 후 다시 시도해주세요.");
-      return;
-    }
-    const raw = draftBySlot[slotKey] ?? "0";
-    const amount = Math.max(0, Math.floor(Number(raw) || 0));
-    if (amount > currentUser.balance) {
-      setError(`예치금이 부족합니다. (입력 ${amount.toLocaleString()}P)`);
-      return;
-    }
-    setError(null);
-    setBusy(true);
-    const res = await fetch(
-      `/api/room/${encodeURIComponent(roomCode)}/auction/bid`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: currentUser.id,
-          slotKey,
-          bidAmount: amount,
-          confirm: true,
-        }),
-      },
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data.error || "확정에 실패했습니다.");
-      setBusy(false);
-      return;
-    }
-
-    if (currentUser?.id) {
-      refreshUser(currentUser.id);
-    }
-
-    if (data.status === "already-confirmed") {
-      setSelectedSlot(
-        (data.confirmedTime as string) ?? (data.confirmedSlot as string),
-      );
-      setPhase("locked");
-      setBusy(false);
-      return;
-    }
-
-    await refreshUserBalance();
-    await fetchStatus();
-    if (data.status === "confirmed" && data.confirmedTime) {
-      setSelectedSlot(data.confirmedTime as string);
-      setPhase("locked");
-    }
-    setBusy(false);
-  };
-
-  const submitAnywhere = async () => {
-    if (!roomCode || !currentUser) {
-      setError("로그인 후 다시 시도해주세요.");
-      return;
-    }
-
-    setError(null);
-    setBusy(true);
-    const res = await fetch(
-      `/api/room/${encodeURIComponent(roomCode)}/auction/bid`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: currentUser.id,
-          anywhere: true,
-        }),
-      },
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setError(data.error || "처리에 실패했습니다.");
-      setBusy(false);
-      return;
-    }
-    await refreshUserBalance();
-    await fetchStatus();
-    if (data.status === "confirmed") {
-      if (data.confirmedTime) {
-        setSelectedSlot(data.confirmedTime);
-        setPhase("locked");
-      }
-    }
-    setBusy(false);
-  };
+  }, [roomCode, fetchStatus, startAuction]);
 
   const handlePenalty = async () => {
     if (!roomCode || !currentUser) {
       setError("로그인 정보 또는 방 코드가 없습니다.");
       return;
     }
+
     const res = await fetch("/api/penalty", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        roomCode,
-        userId: currentUser.id,
-      }),
+      body: JSON.stringify({ roomCode, userId: currentUser.id }),
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({} as { error?: string; balance?: number }));
     if (!res.ok) {
       alert(data.error || "불참 처리 실패");
       return;
     }
 
-    const nextUser = {
-      ...currentUser,
-      balance: data.balance as number,
-    };
+    const nextUser = { ...currentUser, balance: data.balance ?? currentUser.balance };
     localStorage.setItem("currentUser", JSON.stringify(nextUser));
     setCurrentUser(nextUser);
     localStorage.removeItem("currentRoomCode");
-    setRoomCode(null);
-    setRoomStatus(null);
-    const formatted = new Intl.NumberFormat("ko-KR").format(nextUser.balance);
-    alert(`불참 처리 완료: 현재 잔액 ${formatted}P, 방에서 나갔습니다.`);
+    alert(`불참 처리 완료: 현재 잔액 ${nextUser.balance.toLocaleString("ko-KR")}P, 방에서 나갔습니다.`);
     window.location.href = "/room";
   };
 
-  const staticHeader = (
-    <div className="mb-8 flex items-center gap-3">
-      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/20">
-        <Target className="h-5 w-5 text-primary" />
-      </div>
-      <div>
-        <h1 className="text-xl font-bold text-foreground">실시간 예치금 경매</h1>
-        <p className="text-sm text-muted-foreground">
-          후보별 확정 배팅 합이 가장 큰 시간이 낙찰됩니다. 전원 0원이면 후보 중 랜덤입니다.
-        </p>
-      </div>
-    </div>
-  );
-
-  const candidates = roomStatus?.candidateSlots ?? [];
-  const myReady = roomStatus?.myAuctionBid?.isReady ?? false;
-  const readyN = roomStatus?.auctionReadyCount ?? 0;
-  const needN = roomStatus?.auctionRequiredCount ?? 0;
-  const totals = roomStatus?.slotTotals ?? {};
+  const resultLabel = useMemo(() => {
+    if (!selectedSlot) return null;
+    return formatSlotLabel(selectedSlot);
+  }, [selectedSlot]);
 
   if (!mounted) {
-    return (
-      <div className="min-h-screen pb-20 md:pb-0">
-        <Navigation />
-        <main className="mx-auto max-w-2xl px-4 py-6">
-          {staticHeader}
-          <p className="text-sm text-muted-foreground">불러오는 중…</p>
-        </main>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -342,246 +207,78 @@ function RoulettePageInner() {
 
       <main className="mx-auto max-w-2xl px-4 py-6">
         <div className="mb-8 flex items-center gap-3">
-          <div
-            className={cn(
-              "flex h-10 w-10 items-center justify-center rounded-lg",
-              phase === "locked" ? "bg-destructive/20" : "bg-primary/20",
-            )}
-          >
-            <Target
-              className={cn("h-5 w-5", phase === "locked" ? "text-destructive" : "text-primary")}
-            />
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/20">
+            <Target className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-foreground">실시간 예치금 경매</h1>
+            <h1 className="text-xl font-bold text-foreground">예치금 경매 추첨 결과</h1>
             <p className="text-sm text-muted-foreground">
-              후보별 확정 배팅 합이 가장 큰 시간이 낙찰됩니다. 전원 0원이면 후보 중 랜덤입니다.
+              내 시간표에서 제출한 지망 시간과 입찰 금액으로 자동 계산한 결과만 표시합니다.
             </p>
           </div>
         </div>
 
-        {error && (
+        {error ? (
           <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {error}
           </p>
-        )}
+        ) : null}
 
-        <div className="mb-4 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-          방 코드: <span className="font-mono font-semibold text-foreground">{roomCode ?? "-"}</span>{" "}
-          / 제출 {roomStatus?.submittedCount ?? 0}/{roomStatus?.capacity ?? "-"}
-          {roomStatus?.status && (
+        <div className="mb-6 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
+          방 코드: <span className="font-mono font-semibold text-foreground">{roomCode ?? "-"}</span>
+          {roomStatus ? (
             <>
-              {" "}
-              /{" "}
-              <span className="font-medium text-foreground">
-                {roomStatus.status === "waiting"
-                  ? "대기 중"
-                  : roomStatus.status === "ready"
-                    ? "준비 완료"
-                    : "완료"}
-              </span>
+              {" "}/ 제출 {roomStatus.submittedCount}/{roomStatus.capacity}
             </>
-          )}
-          {roomStatus?.auctionStartedAt && !roomStatus.confirmedTime && (
-            <p className="mt-2 font-medium text-foreground">
-              현재 {readyN}/{needN}명 확정 완료
-            </p>
-          )}
-          {roomStatus?.decisionMode && roomStatus.status === "completed" && (
-            <p className="mt-1 text-xs">
-              확정 방식:{" "}
-              <span className="font-medium text-foreground">
-                {decisionModeLabel(roomStatus.decisionMode)}
-              </span>
-            </p>
-          )}
+          ) : null}
         </div>
 
-        <div
-          className={cn(
-            "relative mb-8 overflow-hidden rounded-2xl border-2 p-6 transition-all",
-            phase === "locked" ? "animate-siren border-destructive bg-destructive/10" : "border-border bg-card",
-          )}
-        >
-          {phase === "locked" && selectedSlot && (
-            <div className="space-y-6 text-center">
-              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-destructive animate-pulse">
-                <Lock className="h-10 w-10 text-destructive-foreground" />
-              </div>
-              <div>
-                <p className="mb-2 text-sm font-medium text-destructive">낙찰 · 강제 확정</p>
-                <div
-                  className="text-3xl font-black text-destructive"
-                  suppressHydrationWarning
-                >
-                  {selectedSlot}
-                </div>
-              </div>
-
-              {roomStatus?.auctionWinningBid != null && roomStatus.auctionWinningBid > 0 && (
-                <div className="text-sm font-medium text-warning">
-                  낙찰가: {roomStatus.auctionWinningBid.toLocaleString()}P
-                  {roomStatus.auctionWinnerId === currentUser?.id
-                    ? " (내 입찰 성공, 입찰금 차감 완료)"
-                    : ""}
-                </div>
-              )}
-
-              <div className="flex items-center justify-center gap-2 text-xl font-bold text-destructive">
-                <Skull className="h-6 w-6" />
-                탈출 불가
-                <Skull className="h-6 w-6" />
-              </div>
-            </div>
-          )}
-
-          {phase !== "locked" && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Gavel className="h-5 w-5 shrink-0 text-primary" />
-                <p className="text-sm">
-                  {phase === "pre" && "경매를 시작하면 공통 후보 시간이 열립니다."}
-                  {phase === "bidding" &&
-                    (busy ? "처리 중…" : "각 시간에 배팅 금액을 입력한 뒤 ‘확정’을 누르세요.")}
-                </p>
-              </div>
-
-              {phase === "bidding" &&
-                roomStatus?.auctionStartedAt &&
-                candidates.length > 0 && (
-                  <ul className="space-y-3">
-                    {candidates.map((key) => (
-                      <li
-                        key={key}
-                        className="flex flex-col gap-2 rounded-lg border border-border bg-background/60 p-3 sm:flex-row sm:items-end sm:justify-between"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="font-mono text-sm font-semibold text-foreground">
-                            {formatSlotLabel(key)}
-                          </p>
-                          {totals[key] != null && totals[key]! > 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              확정 배팅 합계: {totals[key]!.toLocaleString()}P
-                            </p>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap items-end gap-2">
-                          <div className="w-28">
-                            <label className="sr-only" htmlFor={`amt-${key}`}>
-                              배팅 P
-                            </label>
-                            <Input
-                              id={`amt-${key}`}
-                              type="number"
-                              min={0}
-                              disabled={myReady || busy}
-                              value={draftBySlot[key] ?? ""}
-                              placeholder="0"
-                              className="font-mono"
-                              onChange={(e) =>
-                                setDraftBySlot((prev) => ({
-                                  ...prev,
-                                  [key]: e.target.value,
-                                }))
-                              }
-                            />
-                          </div>
-                          <Button
-                            size="sm"
-                            disabled={myReady || busy || !currentUser}
-                            onClick={() => void submitSlotBid(key)}
-                          >
-                            확정
-                          </Button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-              {phase === "bidding" &&
-                roomStatus?.auctionStartedAt &&
-                candidates.length === 0 && (
-                  <p className="text-sm text-destructive">공통 후보 시간이 없습니다.</p>
-                )}
-            </div>
-          )}
-        </div>
-
-        {phase === "bidding" &&
-          roomStatus?.auctionStartedAt &&
-          !roomStatus.confirmedTime && (
-            <div className="mb-6">
-              <Button
-                variant="outline"
-                className="w-full"
-                disabled={myReady || busy || !currentUser}
-                onClick={() => void submitAnywhere()}
-              >
-                어디든 상관없음 (0원 · 즉시 확정)
-              </Button>
-            </div>
-          )}
-
-        <div
-          className={cn(
-            "mb-6 flex items-center gap-3 rounded-lg border p-4",
-            phase === "locked" ? "border-destructive bg-destructive/20" : "border-warning/50 bg-warning/10",
-          )}
-        >
-          <AlertTriangle
-            className={cn("h-6 w-6 shrink-0", phase === "locked" ? "text-destructive" : "text-warning")}
-          />
-          <div>
-            <p className={cn("font-bold", phase === "locked" ? "text-destructive" : "text-warning")}>
-              불참 시 예치금 50,000P 차감
-            </p>
+        {phase !== "result" ? (
+          <div className="rounded-xl border border-border bg-card p-8 text-center">
+            <Calendar className="mx-auto mb-4 h-10 w-10 text-primary" />
+            <h2 className="mb-2 text-lg font-bold text-foreground">
+              {phase === "drawing" ? "추첨 결과 계산 중" : "아직 모두 제출하지 않았습니다"}
+            </h2>
             <p className="text-sm text-muted-foreground">
-              낙찰된 사람의 배팅만 확정 시 예치금에서 차감됩니다.
+              {phase === "drawing"
+                ? busy
+                  ? "제출된 시간표와 입찰 금액으로 결과를 계산하고 있습니다."
+                  : "결과를 불러오고 있습니다."
+                : "모든 팀원이 시간표를 제출하면 이 화면에서 자동으로 결과를 보여줍니다."}
             </p>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-6 rounded-xl border border-border bg-card p-8">
+            <div className="text-center">
+              <Lock className="mx-auto mb-4 h-10 w-10 text-primary" />
+              <p className="mb-2 text-sm font-medium text-muted-foreground">최종 확정 시간</p>
+              <h2 className="text-3xl font-black text-foreground">
+                {resultLabel ?? selectedSlot}
+              </h2>
+              {roomStatus?.decisionMode ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  확정 방식: {decisionModeLabel(roomStatus.decisionMode)}
+                </p>
+              ) : null}
+              {roomStatus?.auctionWinningBid != null && roomStatus.auctionWinningBid > 0 ? (
+                <p className="mt-2 text-sm text-warning">
+                  낙찰 입찰 금액: {roomStatus.auctionWinningBid.toLocaleString("ko-KR")}P
+                </p>
+              ) : null}
+            </div>
 
-        {phase !== "locked" && !roomStatus?.auctionStartedAt && (
-          <Button
-            onClick={() => void startAuction()}
-            disabled={!canStartAuction || busy}
-            className="w-full gap-2 py-6 text-lg font-bold bg-destructive hover:bg-destructive/90"
-            size="lg"
-          >
-            <Target className="h-5 w-5" />
-            {canStartAuction
-              ? "실시간 예치금 경매 시작"
-              : "아직 모든 팀원이 제출하지 않았습니다"}
-          </Button>
-        )}
+            <div className="rounded-lg border border-border bg-secondary/30 p-4 text-sm text-muted-foreground">
+              내 시간표에서 제출한 지망 시간과 금액만 반영된 결과입니다.
+              낙찰된 경우에만 예치금이 차감됩니다.
+            </div>
 
-        {myReady && !roomStatus?.confirmedTime && (
-          <p className="mt-3 text-center text-sm font-medium text-success">
-            내 배팅이 확정되었습니다. 팀원 확정을 기다리는 중입니다.
-          </p>
-        )}
-
-        {!currentUser && phase !== "locked" && (
-          <p className="mt-3 text-center text-xs text-muted-foreground">
-            배팅하려면 내 시간표 페이지에서 로그인한 뒤 새로고침하세요.
-          </p>
-        )}
-
-        {phase === "locked" && (
-          <div className="space-y-3">
             <Button
-              className="w-full gap-2 py-6 text-lg font-bold"
-              size="lg"
-              onClick={() => {
-                window.location.href = "/shop";
-              }}
+              variant="destructive"
+              className="w-full"
+              onClick={handlePenalty}
             >
-              <Calendar className="h-5 w-5" />
-              캘린더에 일정 추가
-            </Button>
-            <Button variant="destructive" className="w-full" onClick={handlePenalty}>
-              불참 선언(50,000P 차감)
+              <Skull className="mr-2 h-4 w-4" />
+              불참 선언하기
             </Button>
           </div>
         )}
@@ -592,16 +289,7 @@ function RoulettePageInner() {
 
 export default function RoulettePage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen pb-20 md:pb-0">
-          <Navigation />
-          <main className="mx-auto max-w-2xl px-4 py-6 text-sm text-muted-foreground">
-            불러오는 중…
-          </main>
-        </div>
-      }
-    >
+    <Suspense>
       <RoulettePageInner />
     </Suspense>
   );
