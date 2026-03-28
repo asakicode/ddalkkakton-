@@ -1,2 +1,0 @@
-ALTER TABLE "Room"
-ADD COLUMN "auctionStartedAt" TIMESTAMP(3);
