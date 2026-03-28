@@ -43,6 +43,7 @@ function RoulettePageInner() {
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const requestedRef = useRef(false);
+  const balanceSyncedRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -101,6 +102,10 @@ function RoulettePageInner() {
     if (slot) {
       setSelectedSlot(slot);
       setPhase("result");
+      if (!balanceSyncedRef.current) {
+        balanceSyncedRef.current = true;
+        void refreshUserBalance();
+      }
     } else if (data.submittedCount >= data.capacity) {
       setPhase("drawing");
     } else {
@@ -132,6 +137,7 @@ function RoulettePageInner() {
     }
 
     await refreshUserBalance();
+    balanceSyncedRef.current = true;
     if (data.confirmedTime) {
       setSelectedSlot(data.confirmedTime);
       setPhase("result");
