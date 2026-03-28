@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     where: { code: roomCode },
   });
 
-  if (!room || !room.confirmedSlot) {
+  if (!room || !room.confirmedTime) {
     return NextResponse.json({ error: "확정된 방을 찾을 수 없습니다." }, { status: 400 });
   }
 

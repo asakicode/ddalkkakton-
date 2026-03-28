@@ -20,6 +20,7 @@ export default function MySchedulePage() {
   const [authForm, setAuthForm] = useState({ name: "", password: "" })
   const [authError, setAuthError] = useState<string | null>(null)
   const [roomCode, setRoomCode] = useState<string>("")
+  const [preferredSlot, setPreferredSlot] = useState<string>("")
 
   useEffect(() => {
     const stored = localStorage.getItem("currentUser")
@@ -71,8 +72,9 @@ export default function MySchedulePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: user.id,
-        roomCode: roomCode || undefined,
+        roomCode: roomCode.trim() || undefined,
         blockedSlots: blocked,
+        preferredSlot: preferredSlot.trim() || undefined,
       }),
     }).catch(() => {
       // 단순 프로토타입: 에러 메시지는 별도로 처리하지 않음
@@ -115,9 +117,9 @@ export default function MySchedulePage() {
               <div className="flex items-center gap-2">
                 <input
                   className="w-48 rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
-                  placeholder="방 코드 (예: ABC123)"
+                  placeholder="방 코드"
                   value={roomCode}
-                  onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                  onChange={(e) => setRoomCode(e.target.value)}
                 />
                 <Button
                   variant="outline"
@@ -126,8 +128,15 @@ export default function MySchedulePage() {
                   방 코드 저장
                 </Button>
               </div>
+              <input
+                className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+                placeholder="지망 시간 (선택, 예: 금-14:00) — 공통 시간 안에서만 반영"
+                value={preferredSlot}
+                onChange={(e) => setPreferredSlot(e.target.value)}
+              />
               <p className="text-xs text-muted-foreground">
-                시간표 저장 시 이 방 코드로 제출되어 팀원 비교가 가능합니다.
+                시간표 저장 시 이 방 코드로 제출됩니다. 예치금 경매 시 지망은 공통 가능 시간 안에서만
+                적용됩니다.
               </p>
             </div>
           ) : (

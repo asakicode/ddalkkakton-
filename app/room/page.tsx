@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Users, Copy, Check, Link2, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { decisionModeLabel } from "@/lib/decision-mode-label";
 
 interface CurrentUser {
   id: number;
@@ -18,7 +19,9 @@ interface RoomStatus {
   code: string;
   capacity: number;
   submittedCount: number;
+  confirmedTime: string | null;
   confirmedSlot: string | null;
+  decisionMode: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
 }
@@ -226,6 +229,11 @@ function RoomPageInner() {
           <div className="space-y-4 rounded-lg border border-destructive/40 bg-destructive/10 p-6 text-center">
             <p className="text-sm font-medium text-destructive">시간이 확정되었습니다</p>
             <p className="font-mono text-2xl font-bold text-foreground">{roomStatus?.result}</p>
+            {roomStatus?.decisionMode && (
+              <p className="text-xs text-muted-foreground">
+                확정 방식: {decisionModeLabel(roomStatus.decisionMode)}
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">룰렛 결과 화면으로 이동합니다…</p>
           </div>
         ) : (

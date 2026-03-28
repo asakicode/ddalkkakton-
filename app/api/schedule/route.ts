@@ -3,7 +3,22 @@ import { prisma } from "@/lib/prisma";
 
 // 저장: POST /api/schedule
 export async function POST(req: NextRequest) {
-  const { userId, roomCode, blockedSlots } = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "요청 본문이 올바른 JSON 형식이 아닙니다." },
+      { status: 400 },
+    );
+  }
+
+  const { userId, roomCode, blockedSlots, preferredSlot } = (body ?? {}) as {
+    userId?: number;
+    roomCode?: string;
+    blockedSlots?: string[];
+    preferredSlot?: string | null;
+  };
 
   if (!userId || !Array.isArray(blockedSlots)) {
     return NextResponse.json({ error: "userId와 blockedSlots가 필요합니다." }, { status: 400 });
@@ -15,11 +30,16 @@ export async function POST(req: NextRequest) {
     roomId = room?.id ?? null;
   }
 
+  const pref =
+    typeof preferredSlot === "string" && preferredSlot.trim()
+      ? preferredSlot.trim()
+      : null;
+
   const schedule = await prisma.schedule.create({
     data: {
       userId,
       roomId: roomId ?? undefined,
-      data: { blocked: blockedSlots },
+      data: { blocked: blockedSlots, preferredSlot: pref },
     },
   });
 

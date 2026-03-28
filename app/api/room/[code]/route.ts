@@ -29,7 +29,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
   const submittedUserIds = new Set(room.schedules.map((s) => s.userId));
   const submittedCount = submittedUserIds.size;
-  const result = room.confirmedSlot;
+  const result = room.confirmedTime;
 
   let status: "waiting" | "ready" | "completed";
   if (result) {
@@ -44,11 +44,12 @@ export async function GET(_req: NextRequest, { params }: Params) {
     code: room.code,
     capacity: room.capacity,
     hostId: room.hostId,
-    confirmedSlot: room.confirmedSlot,
-    /** 룰렛 확정 시간 (없으면 null). confirmedSlot 과 동일 */
+    confirmedTime: room.confirmedTime,
+    decisionMode: room.decisionMode,
+    /** 하위 호환 */
+    confirmedSlot: room.confirmedTime,
     result,
     submittedCount,
-    /** 대기: 인원 미충족 / 준비: 전원 제출·아직 미확정 / 완료: 시간 확정 */
     status,
   });
 }
