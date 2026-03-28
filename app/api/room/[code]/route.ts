@@ -116,6 +116,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     hostId: room.hostId,
     confirmedTime: room.confirmedTime,
     decisionMode: room.decisionMode,
+    auctionStartedAt: room.auctionStartedAt,
     auctionWinnerId: room.auctionWinnerId,
     auctionWinningBid: room.auctionWinningBid,
     leadingBid,

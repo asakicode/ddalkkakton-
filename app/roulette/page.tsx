@@ -229,6 +229,7 @@ function RoulettePageInner() {
     await fetchStatus();
     if (data.status === "confirmed" && data.confirmedTime) {
       setSelectedSlot(data.confirmedTime as string);
+      setPhase("locked");
     }
     setBusy(false);
   };
@@ -261,7 +262,10 @@ function RoulettePageInner() {
     await refreshUserBalance();
     await fetchStatus();
     if (data.status === "confirmed") {
-      if (data.confirmedTime) setSelectedSlot(data.confirmedTime);
+      if (data.confirmedTime) {
+        setSelectedSlot(data.confirmedTime);
+        setPhase("locked");
+      }
     }
     setBusy(false);
   };
