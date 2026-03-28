@@ -6,8 +6,9 @@ import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
 import { Target, AlertTriangle, Lock, Calendar, Skull } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { decisionModeLabel } from "@/lib/decision-mode-label";
 
-type Phase = "ready" | "spinning" | "locked" | "no-common";
+type Phase = "ready" | "spinning" | "locked";
 
 interface CurrentUser {
   id: number;
@@ -19,7 +20,9 @@ interface RoomStatus {
   code: string;
   capacity: number;
   submittedCount: number;
+  confirmedTime: string | null;
   confirmedSlot: string | null;
+  decisionMode: string | null;
   result: string | null;
   status: "waiting" | "ready" | "completed";
 }
@@ -66,7 +69,8 @@ function RoulettePageInner() {
     let cancelled = false;
 
     const applyRoomPayload = (data: RoomStatus) => {
-      const slot = data.result ?? data.confirmedSlot;
+      const slot =
+        data.result ?? data.confirmedTime ?? data.confirmedSlot ?? null;
       setRoomStatus(data);
       if (slot) {
         setSelectedSlot(slot);
@@ -116,13 +120,23 @@ function RoulettePageInner() {
       return;
     }
 
-    if (data.status === "no-common") {
-      setPhase("no-common");
+    if (data.status === "already-confirmed") {
+      setSelectedSlot(
+        (data.confirmedTime as string) ?? (data.confirmedSlot as string),
+      );
+      setPhase("locked");
       return;
     }
 
-    setSelectedSlot(data.confirmedSlot as string);
-    setPhase("locked");
+    const time =
+      (data.confirmedTime as string) ?? (data.confirmedSlot as string);
+    if (data.status === "confirmed" && time) {
+      setSelectedSlot(time);
+      setPhase("locked");
+      return;
+    }
+
+    setPhase("ready");
   };
 
   const handlePenalty = async () => {
@@ -162,7 +176,9 @@ function RoulettePageInner() {
       </div>
       <div>
         <h1 className="text-xl font-bold text-foreground">운명의 룰렛</h1>
-        <p className="text-sm text-muted-foreground">공통 빈 시간 중 하나가 강제 확정됩니다</p>
+            <p className="text-sm text-muted-foreground">
+              예치금 경매 규칙으로 팀플 시간이 확정됩니다
+            </p>
       </div>
     </div>
   );
@@ -198,7 +214,7 @@ function RoulettePageInner() {
           <div>
             <h1 className="text-xl font-bold text-foreground">운명의 룰렛</h1>
             <p className="text-sm text-muted-foreground">
-              공통 빈 시간 중 하나가 강제 확정됩니다
+              예치금 경매 규칙으로 팀플 시간이 확정됩니다
             </p>
           </div>
         </div>
@@ -225,6 +241,15 @@ function RoulettePageInner() {
               </span>
             </>
           )}
+          {roomStatus?.decisionMode && roomStatus.status === "completed" && (
+            <>
+              {" "}
+              / 확정 방식:{" "}
+              <span className="font-medium text-foreground">
+                {decisionModeLabel(roomStatus.decisionMode)}
+              </span>
+            </>
+          )}
         </div>
 
         <div
@@ -245,13 +270,6 @@ function RoulettePageInner() {
           {phase === "spinning" && (
             <div className="space-y-4">
               <div className="text-4xl font-bold text-warning animate-pulse">추첨 중...</div>
-            </div>
-          )}
-
-          {phase === "no-common" && (
-            <div className="space-y-4">
-              <p className="text-2xl font-bold text-destructive">공통 시간이 없습니다</p>
-              <p className="text-muted-foreground">재입력 요청: 팀원 전원이 시간표를 다시 조정해주세요.</p>
             </div>
           )}
 

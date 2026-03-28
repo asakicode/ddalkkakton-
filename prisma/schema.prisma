@@ -36,13 +36,14 @@ model DepositTransaction {
 }
 
 model Room {
-  id            Int       @id @default(autoincrement())
-  code          String    @unique
-  capacity      Int
-  hostId        Int
-  confirmedSlot String?
-  confirmedAt   DateTime?
-  createdAt     DateTime  @default(now())
+  id             Int       @id @default(autoincrement())
+  code           String    @unique
+  capacity       Int
+  hostId         Int
+  confirmedTime  String?
+  decisionMode   String?
+  confirmedAt    DateTime?
+  createdAt      DateTime  @default(now())
 
   schedules Schedule[]
 }
