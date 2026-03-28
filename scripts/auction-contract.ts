@@ -32,10 +32,7 @@ const commonAuction = resolveRoomAuction(
 assert.equal(commonAuction.confirmedTime, "화-10:00");
 assert.equal(commonAuction.decisionMode, "COMMON_AUCTION");
 assert.equal(commonAuction.winnerUserId, 2);
-assert.deepEqual(commonAuction.charges, [
-  { userId: 1, amount: 3000 },
-  { userId: 2, amount: 7000 },
-]);
+assert.deepEqual(commonAuction.charges, [{ userId: 2, amount: 7000 }]);
 
 const noCommonAuction = resolveRoomAuction(
   [
@@ -59,10 +56,7 @@ const noCommonAuction = resolveRoomAuction(
 assert.equal(noCommonAuction.confirmedTime, "화-10:00");
 assert.equal(noCommonAuction.decisionMode, "AUCTION");
 assert.equal(noCommonAuction.winnerUserId, 1);
-assert.deepEqual(noCommonAuction.charges, [
-  { userId: 1, amount: 12000 },
-  { userId: 2, amount: 9000 },
-]);
+assert.deepEqual(noCommonAuction.charges, [{ userId: 1, amount: 12000 }]);
 
 const staleBalanceClamp = resolveRoomAuction(
   [participant({ userId: 1, balance: 2000, preferredSlot: "수-11:00", bidAmount: 5000 })],
@@ -79,10 +73,6 @@ const sharedWinningSlot = resolveRoomAuction(
   { randomFn: () => 0 },
 );
 assert.equal(sharedWinningSlot.confirmedTime, "목-12:00");
-assert.deepEqual(sharedWinningSlot.charges, [
-  { userId: 1, amount: 8000 },
-  { userId: 2, amount: 5000 },
-  { userId: 3, amount: 4000 },
-]);
+assert.deepEqual(sharedWinningSlot.charges, [{ userId: 1, amount: 8000 }]);
 
 console.log("auction contract ok");

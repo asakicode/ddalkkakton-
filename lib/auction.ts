@@ -110,8 +110,10 @@ function pickWinningBidder(bidders: EligibleBidder[], slotOrder: Map<string, num
   })[0]!;
 }
 
-function buildCharges(bidders: EligibleBidder[]) {
-  return bidders.map((bidder) => ({ userId: bidder.userId, amount: bidder.effectiveBid }));
+function buildCharges(bidders: EligibleBidder[], winnerUserId: number) {
+  return bidders
+    .filter((bidder) => bidder.userId === winnerUserId)
+    .map((bidder) => ({ userId: bidder.userId, amount: bidder.effectiveBid }));
 }
 
 export function resolveRoomAuction(
@@ -139,7 +141,7 @@ export function resolveRoomAuction(
         decisionMode: "COMMON_AUCTION",
         winnerUserId: winner.userId,
         winningBid: winner.effectiveBid,
-        charges: buildCharges(eligibleBidders),
+        charges: buildCharges(eligibleBidders, winner.userId),
         eligibleBidderCount: eligibleBidders.length,
       };
     }
@@ -163,7 +165,7 @@ export function resolveRoomAuction(
       decisionMode: "AUCTION",
       winnerUserId: winner.userId,
       winningBid: winner.effectiveBid,
-      charges: buildCharges(eligibleBidders),
+      charges: buildCharges(eligibleBidders, winner.userId),
       eligibleBidderCount: eligibleBidders.length,
     };
   }

@@ -59,8 +59,10 @@ function pickWinningBidder(bidders, slotOrder) {
         return left.userId - right.userId;
     })[0];
 }
-function buildCharges(bidders) {
-    return bidders.map((bidder) => ({ userId: bidder.userId, amount: bidder.effectiveBid }));
+function buildCharges(bidders, winnerUserId) {
+    return bidders
+        .filter((bidder) => bidder.userId === winnerUserId)
+        .map((bidder) => ({ userId: bidder.userId, amount: bidder.effectiveBid }));
 }
 function resolveRoomAuction(participants, options) {
     const slotKeys = (0, slot_keys_1.allSlotKeys)();
@@ -79,7 +81,7 @@ function resolveRoomAuction(participants, options) {
                 decisionMode: "COMMON_AUCTION",
                 winnerUserId: winner.userId,
                 winningBid: winner.effectiveBid,
-                charges: buildCharges(eligibleBidders),
+                charges: buildCharges(eligibleBidders, winner.userId),
                 eligibleBidderCount: eligibleBidders.length,
             };
         }
@@ -100,7 +102,7 @@ function resolveRoomAuction(participants, options) {
             decisionMode: "AUCTION",
             winnerUserId: winner.userId,
             winningBid: winner.effectiveBid,
-            charges: buildCharges(eligibleBidders),
+            charges: buildCharges(eligibleBidders, winner.userId),
             eligibleBidderCount: eligibleBidders.length,
         };
     }

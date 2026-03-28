@@ -25,10 +25,7 @@ const commonAuction = (0, auction_1.resolveRoomAuction)([
 strict_1.default.equal(commonAuction.confirmedTime, "화-10:00");
 strict_1.default.equal(commonAuction.decisionMode, "COMMON_AUCTION");
 strict_1.default.equal(commonAuction.winnerUserId, 2);
-strict_1.default.deepEqual(commonAuction.charges, [
-    { userId: 1, amount: 3000 },
-    { userId: 2, amount: 7000 },
-]);
+strict_1.default.deepEqual(commonAuction.charges, [{ userId: 2, amount: 7000 }]);
 const noCommonAuction = (0, auction_1.resolveRoomAuction)([
     participant({
         userId: 1,
@@ -48,10 +45,7 @@ const noCommonAuction = (0, auction_1.resolveRoomAuction)([
 strict_1.default.equal(noCommonAuction.confirmedTime, "화-10:00");
 strict_1.default.equal(noCommonAuction.decisionMode, "AUCTION");
 strict_1.default.equal(noCommonAuction.winnerUserId, 1);
-strict_1.default.deepEqual(noCommonAuction.charges, [
-    { userId: 1, amount: 12000 },
-    { userId: 2, amount: 9000 },
-]);
+strict_1.default.deepEqual(noCommonAuction.charges, [{ userId: 1, amount: 12000 }]);
 const staleBalanceClamp = (0, auction_1.resolveRoomAuction)([participant({ userId: 1, balance: 2000, preferredSlot: "수-11:00", bidAmount: 5000 })], { randomFn: () => 0 });
 strict_1.default.equal(staleBalanceClamp.winningBid, 2000);
 const sharedWinningSlot = (0, auction_1.resolveRoomAuction)([
@@ -60,9 +54,5 @@ const sharedWinningSlot = (0, auction_1.resolveRoomAuction)([
     participant({ userId: 3, balance: 100000, preferredSlot: "금-13:00", bidAmount: 4000 }),
 ], { randomFn: () => 0 });
 strict_1.default.equal(sharedWinningSlot.confirmedTime, "목-12:00");
-strict_1.default.deepEqual(sharedWinningSlot.charges, [
-    { userId: 1, amount: 8000 },
-    { userId: 2, amount: 5000 },
-    { userId: 3, amount: 4000 },
-]);
+strict_1.default.deepEqual(sharedWinningSlot.charges, [{ userId: 1, amount: 8000 }]);
 console.log("auction contract ok");

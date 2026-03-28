@@ -42,32 +42,51 @@ export async function POST(req: NextRequest) {
   const receivers = participantIds.filter((id: number) => id !== userId);
 
   if (receivers.length === 0) {
-    // 받을 사람이 없으면 그냥 차감만
-    const updated = await prisma.user.update({
-      where: { id: userId },
-      data: { balance: { decrement: PENALTY } },
+    const [, , updated] = await prisma.$transaction([
+      prisma.roomBid.deleteMany({
+        where: { roomId: room.id, userId },
+      }),
+      prisma.schedule.updateMany({
+        where: { roomId: room.id, userId },
+        data: { roomId: null },
+      }),
+      prisma.user.update({
+        where: { id: userId },
+        data: { balance: { decrement: PENALTY } },
+      }),
+    ]);
+
+    return NextResponse.json({
+      balance: updated.balance,
+      leftRoom: true,
     });
-    return NextResponse.json({ balance: updated.balance });
   }
 
   const share = Math.floor(PENALTY / receivers.length);
 
-  await prisma.$transaction([
+  const [, , , updatedUser] = await prisma.$transaction([
+    prisma.roomBid.deleteMany({
+      where: { roomId: room.id, userId },
+    }),
+    prisma.schedule.updateMany({
+      where: { roomId: room.id, userId },
+      data: { roomId: null },
+    }),
     prisma.user.update({
       where: { id: userId },
       data: { balance: { decrement: PENALTY } },
     }),
     prisma.user.updateMany({
       where: { id: { in: receivers } },
-      data: { balance: { increment: share } },
-    }),
+        data: { balance: { increment: share } },
+      }),
+    prisma.user.findUniqueOrThrow({ where: { id: userId } }),
   ]);
 
-  const updatedUser = await prisma.user.findUnique({ where: { id: userId } });
-
   return NextResponse.json({
-    balance: updatedUser?.balance ?? 0,
+    balance: updatedUser.balance,
     distributed: share,
+    leftRoom: true,
   });
 }
 

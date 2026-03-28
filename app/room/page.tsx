@@ -285,11 +285,6 @@ function RoomPageInner() {
               <p className="text-sm text-muted-foreground">
                 {roomStatus?.submittedCount ?? 0}/{roomStatus?.capacity ?? memberCount} 명 완료
               </p>
-              {roomStatus?.leadingBid != null && roomStatus.leadingBid > 0 && (
-                <p className="mt-2 text-sm font-medium text-warning">
-                  현재 제출된 최고 입찰액: {roomStatus.leadingBid.toLocaleString()}P
-                </p>
-              )}
             </div>
 
             {allReady && (
